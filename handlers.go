@@ -8,7 +8,7 @@ import (
 	flow "omi-gitlab.e-technik.uni-ulm.de/bwnetflow/bwnetflow_api/go"
 )
 
-var flowMsg = &flow.FlowMessage{}
+var flowMsg *flow.FlowMessage
 
 func handleMessages(consumer *cluster.Consumer, dst chan *flow.FlowMessage) {
 	for {
@@ -17,6 +17,7 @@ func handleMessages(consumer *cluster.Consumer, dst chan *flow.FlowMessage) {
 			log.Println("Message channel closed.")
 		}
 		consumer.MarkOffset(msg, "") // mark message as processed
+		flowMsg = &flow.FlowMessage{}
 		err := proto.Unmarshal(msg.Value, flowMsg)
 		if err != nil {
 			log.Printf("Received broken message. Unmarshalling error: %v", err)
