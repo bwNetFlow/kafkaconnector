@@ -4,27 +4,35 @@ import (
 	"log"
 	"strings"
 
+	"github.com/Shopify/sarama"
 	cluster "github.com/bsm/sarama-cluster"
 	flow "omi-gitlab.e-technik.uni-ulm.de/bwnetflow/bwnetflow_api/go"
 )
 
 // Connector handles a connection to read bwNetFlow flows from kafka
 type Connector struct {
-	// TODO: expand this with producer and another channel
-	consumer    *cluster.Consumer
-	flowChannel chan *flow.FlowMessage
+	consumer        *cluster.Consumer
+	producer        sarama.AsyncProducer
+	consumeChannel  chan *flow.FlowMessage
+	produceChannel  chan *flow.FlowMessage
+	consumerHandler func(*cluster.Consumer, chan *flow.FlowMessage)
+	producerHandler func(sarama.AsyncProducer, string, chan *flow.FlowMessage)
 }
 
 // Connect establishes the connection to kafka
-// TODO: rename this method to reflect consumer focus
-func (connector *Connector) Connect(broker string, topic string, consumergroup string, offset int64) {
+// TODO: should this return the consumeChannel too?
+func (connector *Connector) Consume(broker string, topics []string, consumergroup string, offset int64) {
 	brokers := strings.Split(broker, ",")
 	consConf := cluster.NewConfig()
+	// Enable these unconditionally.
 	consConf.Consumer.Return.Errors = true
-	consConf.Consumer.Offsets.Initial = offset // TODO: make clear that this means initial, else it will be inferred using the consumer group
 	consConf.Group.Return.Notifications = true
-	topics := []string{topic} // TODO: allow listening to multiple topics, but merge them
-	var err error             // TODO: but why?
+	// The offset only works initially. When reusing a Consumer Group, it's
+	// last state will be resumed automatcally (grep MarkOffset)
+	consConf.Consumer.Offsets.Initial = offset
+
+	// everything declared and configured, lets go
+	var err error
 	connector.consumer, err = cluster.NewConsumer(brokers, consumergroup, topics, consConf)
 	if err != nil {
 		log.Fatalf("Error initializing the Kafka Consumer: %v", err)
@@ -32,51 +40,91 @@ func (connector *Connector) Connect(broker string, topic string, consumergroup s
 	log.Println("Kafka connection established.")
 
 	// start message handling in background
-	connector.flowChannel = make(chan *flow.FlowMessage)
-	// TODO: make handleMessages a parameter, which is the current one by default
-	// this would allow overwriting the handling function... also, rename
-	// the current handler to reflect what it does
-	go handleMessages(connector.consumer, connector.flowChannel)
+	connector.consumeChannel = make(chan *flow.FlowMessage) // TODO: make buffer sizes configurable?
+	if connector.consumerHandler != nil {
+		go connector.consumerHandler(connector.consumer, connector.consumeChannel)
+	} else {
+		go decodeMessages(connector.consumer, connector.consumeChannel)
+	}
+}
+
+// TODO: should this return the produceChannel too?
+func (connector *Connector) Produce(broker string, topic string) {
+	brokers := strings.Split(broker, ",")
+	prodConf := sarama.NewConfig()
+	prodConf.Producer.Return.Successes = false // this would block until we've read the ACK
+	// TODO: The setting will cause deadlocks if not read. If the handler
+	// is overwritten, this will most likely be forgotten...
+	prodConf.Producer.Return.Errors = true
+
+	// everything declared and configured, lets go
+	var err error
+	connector.producer, err = sarama.NewAsyncProducer(brokers, prodConf)
+	if err != nil {
+		log.Fatalf("Error initializing the Kafka Producer: %v", err)
+	}
+
+	// start message handling in background
+	connector.produceChannel = make(chan *flow.FlowMessage) // TODO: make buffer sizes configurable?
+	if connector.producerHandler != nil {
+		go connector.producerHandler(connector.producer, topic, connector.produceChannel)
+	} else {
+		go encodeMessages(connector.producer, topic, connector.produceChannel)
+	}
+}
+
+func (connector *Connector) ReplaceConsumedMessageHandler(replacement func(*cluster.Consumer, chan *flow.FlowMessage)) {
+	connector.consumerHandler = replacement
+}
+
+func (connector *Connector) ReplaceProducedMessageHandler(replacement func(sarama.AsyncProducer, string, chan *flow.FlowMessage)) {
+	connector.producerHandler = replacement
 }
 
 // Close closes the connection to kafka
-// TODO: close should close consumer and producer, if applicable... provide seperate ones too
 func (connector *Connector) Close() {
-	connector.consumer.Close()
-	log.Println("Kafka connection closed.")
+	if connector.consumer != nil {
+		connector.consumer.Close()
+		log.Println("Kafka Consumer connection closed.")
+	}
+	if connector.producer != nil {
+		connector.producer.Close()
+		log.Println("Kafka Producer connection closed.")
+	}
 }
 
-// Messages provides bwNetFlow messages as channel
-// TODO: rename to reflect reading from consumer, add a production channel too
-func (connector *Connector) Messages() <-chan *flow.FlowMessage {
-	return connector.flowChannel
+func (connector *Connector) ConsumedMessages() <-chan *flow.FlowMessage {
+	return connector.consumeChannel
 }
 
-// Errors provides bwNetFlow Errors as channel
+func (connector *Connector) ProducedMessages() chan *flow.FlowMessage {
+	return connector.produceChannel
+}
+
 func (connector *Connector) Errors() <-chan error {
-	// pass through errors from consumer
+	// Consumer Errors are relayed directly from the Kafka Cluster.
+	// TODO: what happens if this is not read? These would be logged by default, but where to?
 	return connector.consumer.Errors()
 }
 
-// Notifications provides bwNetFlow Notifications as channel
 func (connector *Connector) Notifications() <-chan *cluster.Notification {
-	// pass through notifications from consumer
+	// Consumer Notifications are relayed directly from the Kafka Cluster.
+	// These include which topics and partitions are read by this instance
+	// and are sent on every Rebalancing Event.
+	// TODO: what happens if this is not read? Maybe always enable logging for these, they're useful
 	return connector.consumer.Notifications()
 }
 
 // EnableLogging prints kafka errors and notifications to log
 func (connector *Connector) EnableLogging() {
-	// handle kafka errors
-	go func() {
-		for err := range connector.Errors() { // TODO: is this range without index proper?
+	go func() { // spawn a logger for Errors
+		for err := range connector.Errors() {
 			log.Printf("Kafka Error: %s\n", err.Error())
 		}
 	}()
-
-	// handle kafka notifications
-	go func() {
+	go func() { // spawn a logger for Notification
 		for ntf := range connector.Notifications() {
-			log.Printf("Kafka Notification: %+v\n", ntf) // TODO: investigate why this uses %+v and not %s
+			log.Printf("Kafka Notification: %+v\n", ntf)
 		}
 	}()
 }
