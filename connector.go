@@ -11,10 +11,11 @@ import (
 
 // Connector handles a connection to read bwNetFlow flows from kafka
 type Connector struct {
-	consumer        *cluster.Consumer
-	producer        sarama.AsyncProducer
-	consumeChannel  chan *flow.FlowMessage
-	produceChannel  chan *flow.FlowMessage
+	consumer       *cluster.Consumer
+	producer       sarama.AsyncProducer
+	consumeChannel chan *flow.FlowMessage
+	produceChannel chan *flow.FlowMessage
+	// TODO: by having below signatures use FlowMessage, replacing the handlers is quite useless
 	consumerHandler func(*cluster.Consumer, chan *flow.FlowMessage)
 	producerHandler func(sarama.AsyncProducer, string, chan *flow.FlowMessage)
 }
