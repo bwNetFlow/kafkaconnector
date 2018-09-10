@@ -17,7 +17,7 @@ func handleMessages(consumer *cluster.Consumer, dst chan *flow.FlowMessage) {
 			log.Println("Message channel closed.")
 		}
 		consumer.MarkOffset(msg, "") // mark message as processed
-		flowMsg = &flow.FlowMessage{}
+		flowMsg = new(flow.FlowMessage)
 		err := proto.Unmarshal(msg.Value, flowMsg)
 		if err != nil {
 			log.Printf("Received broken message. Unmarshalling error: %v", err)
