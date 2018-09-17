@@ -19,7 +19,7 @@ type Connector struct {
 
 // Connect establishes the connection to kafka
 // TODO: should this return the consumeChannel too?
-func (connector *Connector) Consume(broker string, topics []string, consumergroup string, offset int64) {
+func (connector *Connector) StartConsumer(broker string, topics []string, consumergroup string, offset int64) {
 	brokers := strings.Split(broker, ",")
 	consConf := cluster.NewConfig()
 	// Enable these unconditionally.
@@ -43,7 +43,7 @@ func (connector *Connector) Consume(broker string, topics []string, consumergrou
 }
 
 // TODO: should this return the produceChannel too?
-func (connector *Connector) Produce(broker string, topic string) {
+func (connector *Connector) StartProduce(broker string, topic string) {
 	brokers := strings.Split(broker, ",")
 	prodConf := sarama.NewConfig()
 	prodConf.Producer.Return.Successes = false // this would block until we've read the ACK
@@ -62,7 +62,7 @@ func (connector *Connector) Produce(broker string, topic string) {
 	go encodeMessages(connector.producer, topic, connector.produceChannel)
 }
 
-// Close closes the connection to kafka
+// Close closes the connection to kafka, i.e. Consumer and Producer
 func (connector *Connector) Close() {
 	if connector.consumer != nil {
 		connector.consumer.Close()
@@ -74,21 +74,39 @@ func (connector *Connector) Close() {
 	}
 }
 
-func (connector *Connector) ConsumedMessages() <-chan *flow.FlowMessage {
+func (connector *Connector) CloseConsumer() {
+	if connector.consumer != nil {
+		connector.consumer.Close()
+		log.Println("Kafka Consumer connection closed.")
+	} else {
+		log.Println("WARNING: CloseConsumer called, but no Consumer was initialized.")
+	}
+}
+
+func (connector *Connector) CloseProducer() {
+	if connector.producer != nil {
+		connector.producer.Close()
+		log.Println("Kafka Producer connection closed.")
+	} else {
+		log.Println("WARNING: CloseProducer called, but no Producer was initialized.")
+	}
+}
+
+func (connector *Connector) ConsumerChannel() <-chan *flow.FlowMessage {
 	return connector.consumeChannel
 }
 
-func (connector *Connector) ProducedMessages() chan *flow.FlowMessage {
+func (connector *Connector) ProducerChannel() chan *flow.FlowMessage {
 	return connector.produceChannel
 }
 
-func (connector *Connector) Errors() <-chan error {
+func (connector *Connector) ConsumerErrors() <-chan error {
 	// Consumer Errors are relayed directly from the Kafka Cluster.
 	// TODO: what happens if this is not read? These would be logged by default, but where to?
 	return connector.consumer.Errors()
 }
 
-func (connector *Connector) Notifications() <-chan *cluster.Notification {
+func (connector *Connector) ConsumerNotifications() <-chan *cluster.Notification {
 	// Consumer Notifications are relayed directly from the Kafka Cluster.
 	// These include which topics and partitions are read by this instance
 	// and are sent on every Rebalancing Event.
@@ -99,12 +117,12 @@ func (connector *Connector) Notifications() <-chan *cluster.Notification {
 // EnableLogging prints kafka errors and notifications to log
 func (connector *Connector) EnableLogging() {
 	go func() { // spawn a logger for Errors
-		for err := range connector.Errors() {
+		for err := range connector.ConsumerErrors() {
 			log.Printf("Kafka Error: %s\n", err.Error())
 		}
 	}()
 	go func() { // spawn a logger for Notification
-		for ntf := range connector.Notifications() {
+		for ntf := range connector.ConsumerNotifications() {
 			log.Printf("Kafka Notification: %+v\n", ntf)
 		}
 	}()
