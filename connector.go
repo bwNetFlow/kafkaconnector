@@ -3,6 +3,7 @@ package kafka
 import (
 	"log"
 	"strings"
+	"time"
 
 	"github.com/Shopify/sarama"
 	cluster "github.com/bsm/sarama-cluster"
@@ -11,15 +12,33 @@ import (
 
 // Connector handles a connection to read bwNetFlow flows from kafka
 type Connector struct {
-	consumer       *cluster.Consumer
-	producer       sarama.AsyncProducer
-	consumeChannel chan *flow.FlowMessage
-	produceChannel chan *flow.FlowMessage
+	consumer        *cluster.Consumer
+	producer        sarama.AsyncProducer
+	consumerChannel chan *flow.FlowMessage
+	producerChannel chan *flow.FlowMessage
+	manualErrors    bool
 }
 
-// Connect establishes the connection to kafka
-// TODO: should this return the consumeChannel too?
-func (connector *Connector) StartConsumer(broker string, topics []string, consumergroup string, offset int64) {
+// Enable manual error handling by setting the internal manualErros flag to true.
+//
+// If this is done before any `.Start*` method was called, no go routines will
+// be spawned for logging any messages.
+// If this is done after any `.Start*` method was called, spawned go routines
+// will die after another message has been received, or after a maximum of 5s.
+// After their termination, the custom, application-level error handling will
+// be guaranteed to receive all messages. It recommended to set this before
+// starting anything.
+//
+// If this is set, all exposed channels of a running component (ConsumerErrors,
+// ConsumerNotifications and ProducerErrors) will have to be read by the
+// application, or the Kafka libraries will deadlock.
+func (connector *Connector) EnableManualErrorHandling() {
+	connector.manualErrors = true
+}
+
+// Start a Kafka Consumer with the specified parameters. Its output will be
+// available in the channel returned by ConsumerChannel.
+func (connector *Connector) StartConsumer(broker string, topics []string, consumergroup string, offset int64) error {
 	brokers := strings.Split(broker, ",")
 	consConf := cluster.NewConfig()
 	// Enable these unconditionally.
@@ -33,33 +52,61 @@ func (connector *Connector) StartConsumer(broker string, topics []string, consum
 	var err error
 	connector.consumer, err = cluster.NewConsumer(brokers, consumergroup, topics, consConf)
 	if err != nil {
-		log.Fatalf("Error initializing the Kafka Consumer: %v", err)
+		return err
 	}
 	log.Println("Kafka connection established.")
 
 	// start message handling in background
-	connector.consumeChannel = make(chan *flow.FlowMessage) // TODO: make buffer sizes configurable?
-	go decodeMessages(connector.consumer, connector.consumeChannel)
+	connector.consumerChannel = make(chan *flow.FlowMessage) // TODO: make buffer sizes configurable?
+	go decodeMessages(connector.consumer, connector.consumerChannel)
+	if !connector.manualErrors {
+		log.Println("Spawning a logging goroutine, as the manualErrors option is false.")
+		go func() {
+			for !connector.manualErrors {
+				select {
+				case msg := <-connector.ConsumerErrors():
+					log.Printf("Kafka Consumer Error: %s\n", msg.Error())
+				case msg := <-connector.ConsumerNotifications():
+					log.Printf("Kafka Consumer Notification: %+v\n", msg)
+				case <-time.After(5 * time.Second):
+				}
+			}
+		}()
+	}
+	return nil
 }
 
-// TODO: should this return the produceChannel too?
-func (connector *Connector) StartProduce(broker string, topic string) {
+// Start a Kafka Producer with the specified parameters. The channel returned
+// by ProducerChannel will be accepting your input.
+func (connector *Connector) StartProducer(broker string, topic string) error {
 	brokers := strings.Split(broker, ",")
 	prodConf := sarama.NewConfig()
 	prodConf.Producer.Return.Successes = false // this would block until we've read the ACK
-	// TODO: The setting will cause deadlocks if not read.
 	prodConf.Producer.Return.Errors = true
 
 	// everything declared and configured, lets go
 	var err error
 	connector.producer, err = sarama.NewAsyncProducer(brokers, prodConf)
 	if err != nil {
-		log.Fatalf("Error initializing the Kafka Producer: %v", err)
+		return err
 	}
 
 	// start message handling in background
-	connector.produceChannel = make(chan *flow.FlowMessage) // TODO: make buffer sizes configurable?
-	go encodeMessages(connector.producer, topic, connector.produceChannel)
+	connector.producerChannel = make(chan *flow.FlowMessage) // TODO: make buffer sizes configurable?
+	go encodeMessages(connector.producer, topic, connector.producerChannel)
+	if !connector.manualErrors {
+		log.Println("Spawning a logging goroutine, as the manualErrors option is false.")
+		go func() {
+			for !connector.manualErrors {
+				select {
+				case msg := <-connector.ProducerErrors():
+					log.Printf("Kafka Producer Error: %s\n", msg.Error())
+				case <-time.After(5 * time.Second):
+				}
+			}
+		}()
+	}
+	return nil
 }
 
 // Close closes the connection to kafka, i.e. Consumer and Producer
@@ -74,6 +121,7 @@ func (connector *Connector) Close() {
 	}
 }
 
+// Close the Kafka Consumer specifically.
 func (connector *Connector) CloseConsumer() {
 	if connector.consumer != nil {
 		connector.consumer.Close()
@@ -83,6 +131,7 @@ func (connector *Connector) CloseConsumer() {
 	}
 }
 
+// Close the Kafka Producer specifically.
 func (connector *Connector) CloseProducer() {
 	if connector.producer != nil {
 		connector.producer.Close()
@@ -92,38 +141,40 @@ func (connector *Connector) CloseProducer() {
 	}
 }
 
+// Return the channel used for receiving Flows from the Kafka Consumer.
 func (connector *Connector) ConsumerChannel() <-chan *flow.FlowMessage {
-	return connector.consumeChannel
+	return connector.consumerChannel
 }
 
+// Return the channel used for handing over Flows to the Kafka Producer.
 func (connector *Connector) ProducerChannel() chan *flow.FlowMessage {
-	return connector.produceChannel
+	return connector.producerChannel
 }
 
+// Consumer Errors relayed directly from the Kafka Cluster.
+//
+// This will only return a channel after EnableManualErrorHandling has been called.
+// IMPORTANT: read EnableManualErrorHandling docs carefully
 func (connector *Connector) ConsumerErrors() <-chan error {
-	// Consumer Errors are relayed directly from the Kafka Cluster.
-	// TODO: what happens if this is not read? These would be logged by default, but where to?
+	if !connector.manualErrors {
+	}
 	return connector.consumer.Errors()
 }
 
+// Consumer Notifications are relayed directly from the Kafka Cluster.
+// These include which topics and partitions are read by this instance
+// and are sent on every Rebalancing Event.
+//
+// This will only return a channel after EnableManualErrorHandling has been called.
+// IMPORTANT: read EnableManualErrorHandling docs carefully
 func (connector *Connector) ConsumerNotifications() <-chan *cluster.Notification {
-	// Consumer Notifications are relayed directly from the Kafka Cluster.
-	// These include which topics and partitions are read by this instance
-	// and are sent on every Rebalancing Event.
-	// TODO: what happens if this is not read? Maybe always enable logging for these, they're useful
 	return connector.consumer.Notifications()
 }
 
-// EnableLogging prints kafka errors and notifications to log
-func (connector *Connector) EnableLogging() {
-	go func() { // spawn a logger for Errors
-		for err := range connector.ConsumerErrors() {
-			log.Printf("Kafka Error: %s\n", err.Error())
-		}
-	}()
-	go func() { // spawn a logger for Notification
-		for ntf := range connector.ConsumerNotifications() {
-			log.Printf("Kafka Notification: %+v\n", ntf)
-		}
-	}()
+// Producer Errors are relayed directly from the Kafka Cluster.
+//
+// This will only return a channel after EnableManualErrorHandling has been called.
+// IMPORTANT: read EnableManualErrorHandling docs carefully
+func (connector *Connector) ProducerErrors() <-chan *sarama.ProducerError {
+	return connector.producer.Errors()
 }

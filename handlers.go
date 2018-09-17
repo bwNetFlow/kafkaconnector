@@ -29,14 +29,14 @@ func decodeMessages(consumer *cluster.Consumer, dst chan *flow.FlowMessage) {
 
 func encodeMessages(producer sarama.AsyncProducer, topic string, src chan *flow.FlowMessage) {
 	for {
-		b, _ := proto.Marshal(<-src)
-		select {
-		case producer.Input() <- &sarama.ProducerMessage{
+		binary, err := proto.Marshal(<-src)
+		if err != nil {
+			log.Printf("Could not encode message. Marshalling error: %v", err)
+			continue
+		}
+		producer.Input() <- &sarama.ProducerMessage{
 			Topic: topic,
-			Value: sarama.ByteEncoder(b),
-		}:
-		case err := <-producer.Errors():
-			log.Printf("Failed to produce message: %v", err)
+			Value: sarama.ByteEncoder(binary),
 		}
 	}
 }
