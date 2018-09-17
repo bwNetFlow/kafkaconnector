@@ -15,9 +15,6 @@ type Connector struct {
 	producer       sarama.AsyncProducer
 	consumeChannel chan *flow.FlowMessage
 	produceChannel chan *flow.FlowMessage
-	// TODO: by having below signatures use FlowMessage, replacing the handlers is quite useless
-	consumerHandler func(*cluster.Consumer, chan *flow.FlowMessage)
-	producerHandler func(sarama.AsyncProducer, string, chan *flow.FlowMessage)
 }
 
 // Connect establishes the connection to kafka
@@ -42,11 +39,7 @@ func (connector *Connector) Consume(broker string, topics []string, consumergrou
 
 	// start message handling in background
 	connector.consumeChannel = make(chan *flow.FlowMessage) // TODO: make buffer sizes configurable?
-	if connector.consumerHandler != nil {
-		go connector.consumerHandler(connector.consumer, connector.consumeChannel)
-	} else {
-		go decodeMessages(connector.consumer, connector.consumeChannel)
-	}
+	go decodeMessages(connector.consumer, connector.consumeChannel)
 }
 
 // TODO: should this return the produceChannel too?
@@ -54,8 +47,7 @@ func (connector *Connector) Produce(broker string, topic string) {
 	brokers := strings.Split(broker, ",")
 	prodConf := sarama.NewConfig()
 	prodConf.Producer.Return.Successes = false // this would block until we've read the ACK
-	// TODO: The setting will cause deadlocks if not read. If the handler
-	// is overwritten, this will most likely be forgotten...
+	// TODO: The setting will cause deadlocks if not read.
 	prodConf.Producer.Return.Errors = true
 
 	// everything declared and configured, lets go
@@ -67,19 +59,7 @@ func (connector *Connector) Produce(broker string, topic string) {
 
 	// start message handling in background
 	connector.produceChannel = make(chan *flow.FlowMessage) // TODO: make buffer sizes configurable?
-	if connector.producerHandler != nil {
-		go connector.producerHandler(connector.producer, topic, connector.produceChannel)
-	} else {
-		go encodeMessages(connector.producer, topic, connector.produceChannel)
-	}
-}
-
-func (connector *Connector) ReplaceConsumedMessageHandler(replacement func(*cluster.Consumer, chan *flow.FlowMessage)) {
-	connector.consumerHandler = replacement
-}
-
-func (connector *Connector) ReplaceProducedMessageHandler(replacement func(sarama.AsyncProducer, string, chan *flow.FlowMessage)) {
-	connector.producerHandler = replacement
+	go encodeMessages(connector.producer, topic, connector.produceChannel)
 }
 
 // Close closes the connection to kafka
