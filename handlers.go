@@ -16,7 +16,7 @@ func decodeMessages(consumer *cluster.Consumer, dst chan *flow.FlowMessage) {
 			log.Println("Message channel closed.")
 			close(dst)
 		}
-		consumer.MarkOffset(msg, "") // mark message as processed TODO: is this sensible?
+		consumer.MarkOffset(msg, "") // mark message as processed
 		flowMsg := new(flow.FlowMessage)
 		err := proto.Unmarshal(msg.Value, flowMsg)
 		if err != nil {
