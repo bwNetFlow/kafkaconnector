@@ -17,6 +17,7 @@ type Connector struct {
 	consumerChannel chan *flow.FlowMessage
 	producerChannel chan *flow.FlowMessage
 	manualErrors    bool
+	channelLength   uint
 }
 
 // Enable manual error handling by setting the internal manualErros flag to true.
@@ -34,6 +35,11 @@ type Connector struct {
 // application, or the Kafka libraries will deadlock.
 func (connector *Connector) EnableManualErrorHandling() {
 	connector.manualErrors = true
+}
+
+// Set the channel length to something >0. Maybe read the source before using it.
+func (connector *Connector) SetChannelLength(l uint) {
+	connector.channelLength = l
 }
 
 // Start a Kafka Consumer with the specified parameters. Its output will be
@@ -57,7 +63,7 @@ func (connector *Connector) StartConsumer(broker string, topics []string, consum
 	log.Println("Kafka connection established.")
 
 	// start message handling in background
-	connector.consumerChannel = make(chan *flow.FlowMessage) // TODO: make buffer sizes configurable?
+	connector.consumerChannel = make(chan *flow.FlowMessage, connector.channelLength)
 	go decodeMessages(connector.consumer, connector.consumerChannel)
 	if !connector.manualErrors {
 		log.Println("Spawning a logging goroutine, as the manualErrors option is false.")
@@ -92,7 +98,7 @@ func (connector *Connector) StartProducer(broker string, topic string) error {
 	}
 
 	// start message handling in background
-	connector.producerChannel = make(chan *flow.FlowMessage) // TODO: make buffer sizes configurable?
+	connector.producerChannel = make(chan *flow.FlowMessage, connector.channelLength)
 	go encodeMessages(connector.producer, topic, connector.producerChannel)
 	if !connector.manualErrors {
 		log.Println("Spawning a logging goroutine, as the manualErrors option is false.")
