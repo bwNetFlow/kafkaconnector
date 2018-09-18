@@ -148,11 +148,15 @@ func (connector *Connector) CloseProducer() {
 }
 
 // Return the channel used for receiving Flows from the Kafka Consumer.
+// If this channel closes, it means the upstream Kafka Consumer has closed its
+// channel previously of the last decoding step. You can restart the Consumer
+// by using .StartConsumer() on the same Connector object.
 func (connector *Connector) ConsumerChannel() <-chan *flow.FlowMessage {
 	return connector.consumerChannel
 }
 
 // Return the channel used for handing over Flows to the Kafka Producer.
+// If writing to this channel blocks, check the log.
 func (connector *Connector) ProducerChannel() chan *flow.FlowMessage {
 	return connector.producerChannel
 }

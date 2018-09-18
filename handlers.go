@@ -14,7 +14,7 @@ func decodeMessages(consumer *cluster.Consumer, dst chan *flow.FlowMessage) {
 		msg, ok := <-consumer.Messages()
 		if !ok {
 			log.Println("Message channel closed.")
-			// TODO: why don't we do something useful here?
+			close(dst)
 		}
 		consumer.MarkOffset(msg, "") // mark message as processed TODO: is this sensible?
 		flowMsg := new(flow.FlowMessage)
