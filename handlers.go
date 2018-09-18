@@ -23,11 +23,11 @@ func decodeMessages(consumer *cluster.Consumer, dst chan *flow.FlowMessage) {
 			log.Printf("Received broken message. Unmarshalling error: %v", err)
 			continue
 		}
-		dst <- flowMsg // TODO: investigate how unbuffered channels affect this program as a whole
+		dst <- flowMsg
 	}
 }
 
-func encodeMessages(producer sarama.AsyncProducer, topic string, src chan *flow.FlowMessage) {
+func encodeMessages(producer sarama.AsyncProducer, topic string, src <-chan *flow.FlowMessage) {
 	for {
 		binary, err := proto.Marshal(<-src)
 		if err != nil {
