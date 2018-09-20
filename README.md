@@ -20,14 +20,13 @@ func main() {
 	broker := "127.0.0.1:9092,[::1]:9092" // TODO: set valid uris
 	topic := "flow-messages-enriched"
 	consumerGroup := "example-consumer"
-	kafkaConn.Connect(broker, topic, consumerGroup, sarama.OffsetNewest)
-	kafkaConn.EnableLogging()
+	kafkaConn.StartConsumer(broker, topic, consumerGroup, sarama.OffsetNewest)
 	defer kafkaConn.Close()
 
 	// receive flows: e.g. count flows & bytes
 	var flowCounter, byteCounter uint64
 	for {
-		flow := <-kafkaConn.Messages()
+		flow := <-kafkaConn.ConsumerChannel()
 		// process the flow here ...
 		flowCounter++
 		byteCounter += flow.GetBytes()

@@ -9,6 +9,7 @@ import (
 	flow "omi-gitlab.e-technik.uni-ulm.de/bwnetflow/bwnetflow_api/go"
 )
 
+// Decode Kafka Messages using our API definition
 func decodeMessages(consumer *cluster.Consumer, dst chan *flow.FlowMessage) {
 	for {
 		msg, ok := <-consumer.Messages()
@@ -27,6 +28,7 @@ func decodeMessages(consumer *cluster.Consumer, dst chan *flow.FlowMessage) {
 	}
 }
 
+// Encode Flows using our API definition
 func encodeMessages(producer sarama.AsyncProducer, topic string, src <-chan *flow.FlowMessage) {
 	for {
 		binary, err := proto.Marshal(<-src)
