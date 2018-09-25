@@ -16,6 +16,7 @@ func decodeMessages(consumer *cluster.Consumer, dst chan *flow.FlowMessage) {
 		if !ok {
 			log.Println("Message channel closed.")
 			close(dst)
+			break
 		}
 		consumer.MarkOffset(msg, "") // mark message as processed
 		flowMsg := new(flow.FlowMessage)

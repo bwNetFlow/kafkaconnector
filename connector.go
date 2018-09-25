@@ -73,9 +73,17 @@ func (connector *Connector) StartConsumer(broker string, topics []string, consum
 			running := true
 			for running {
 				select {
-				case msg := <-connector.consumer.Errors():
+				case msg, ok := <-connector.consumer.Errors():
+					if !ok {
+						running = false
+						continue
+					}
 					log.Printf("Kafka Consumer Error: %s\n", msg.Error())
-				case msg := <-connector.consumer.Notifications():
+				case msg, ok := <-connector.consumer.Notifications():
+					if !ok {
+						running = false
+						continue
+					}
 					log.Printf("Kafka Consumer Notification: %+v\n", msg)
 				case _, ok := <-connector.manualErrSignal:
 					running = ok
@@ -115,7 +123,11 @@ func (connector *Connector) StartProducer(broker string, topic string) error {
 			running := true
 			for running {
 				select {
-				case msg := <-connector.producer.Errors():
+				case msg, ok := <-connector.producer.Errors():
+					if !ok {
+						running = false
+						continue
+					}
 					log.Printf("Kafka Producer Error: %s\n", msg.Error())
 				case _, ok := <-connector.manualErrSignal:
 					running = ok
