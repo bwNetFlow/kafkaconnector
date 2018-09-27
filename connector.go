@@ -1,6 +1,9 @@
 package kafka
 
 import (
+	"crypto/tls"
+	"crypto/x509"
+
 	"log"
 	"strings"
 
@@ -44,11 +47,20 @@ func (connector *Connector) SetChannelLength(l uint) {
 // Start a Kafka Consumer with the specified parameters. Its output will be
 // available in the channel returned by ConsumerChannel.
 func (connector *Connector) StartConsumer(broker string, topics []string, consumergroup string, offset int64) error {
+	var err error
 	if !connector.manualErrFlag && connector.manualErrSignal == nil {
 		connector.manualErrSignal = make(chan bool)
 	}
 	brokers := strings.Split(broker, ",")
 	consConf := cluster.NewConfig()
+	// Enable TLS
+	rootCAs, err := x509.SystemCertPool()
+	if err != nil {
+		log.Println("SSL Error:", err)
+		return err
+	}
+	consConf.Net.TLS.Enable = true
+	consConf.Net.TLS.Config = &tls.Config{RootCAs: rootCAs}
 	// Enable these unconditionally.
 	consConf.Consumer.Return.Errors = true
 	consConf.Group.Return.Notifications = true
@@ -57,7 +69,6 @@ func (connector *Connector) StartConsumer(broker string, topics []string, consum
 	consConf.Consumer.Offsets.Initial = offset
 
 	// everything declared and configured, lets go
-	var err error
 	connector.consumer, err = cluster.NewConsumer(brokers, consumergroup, topics, consConf)
 	if err != nil {
 		return err
