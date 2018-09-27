@@ -117,7 +117,6 @@ func (connector *Connector) StartProducer(broker string, topic string) error {
 	connector.producerChannel = make(chan *flow.FlowMessage, connector.channelLength)
 	go encodeMessages(connector.producer, topic, connector.producerChannel)
 	if !connector.manualErrFlag {
-		log.Println("Spawning a logging goroutine, as the manual Errors option is false.")
 		go func() {
 			log.Println("Spawned a Producer Logger, no manual error handling.")
 			running := true
@@ -133,7 +132,7 @@ func (connector *Connector) StartProducer(broker string, topic string) error {
 					running = ok
 				}
 			}
-			log.Println("Consumer Logger terminated.")
+			log.Println("Producer Logger terminated.")
 		}()
 	}
 	return nil
