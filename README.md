@@ -21,6 +21,7 @@ func main() {
 	topic := "flow-messages-enriched"
 	consumerGroup := "example-consumer"
 	kafkaConn.StartConsumer(broker, topic, consumerGroup, sarama.OffsetNewest)
+	kafkaConn.SetAuthAnon()
 	defer kafkaConn.Close()
 
 	// receive flows: e.g. count flows & bytes
