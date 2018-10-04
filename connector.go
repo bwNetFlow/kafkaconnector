@@ -1,7 +1,11 @@
 package kafka
 
 import (
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
 	"log"
+	"os"
 	"strings"
 
 	"github.com/Shopify/sarama"
@@ -11,6 +15,8 @@ import (
 
 // Connector handles a connection to read bwNetFlow flows from kafka.
 type Connector struct {
+	user            string
+	pass            string
 	consumer        *cluster.Consumer
 	producer        sarama.AsyncProducer
 	consumerChannel chan *flow.FlowMessage
@@ -18,6 +24,29 @@ type Connector struct {
 	manualErrFlag   bool
 	manualErrSignal chan bool
 	channelLength   uint
+}
+
+// Explicitly set which login to use in SASL/PLAIN auth via TLS
+func (connector *Connector) SetAuth(user string, pass string) {
+	connector.user = user
+	connector.pass = pass
+}
+
+// Check environment to infer which login to use in SASL/PLAIN auth via TLS
+// Requires KAFKA_SASL_USER and KAFKA_SASL_PASS to be set for this process.
+func (connector *Connector) SetAuthFromEnv() error {
+	connector.user = os.Getenv("KAFKA_SASL_USER")
+	connector.pass = os.Getenv("KAFKA_SASL_PASS")
+	if connector.user == "" || connector.pass == "" {
+		return errors.New("Setting Kafka SASL info from Environment was unsuccessful.")
+	}
+	return nil
+}
+
+// Set anonymous credentials as login method.
+func (connector *Connector) SetAuthAnon() {
+	connector.user = "anon"
+	connector.pass = "anon"
 }
 
 // Enable manual error handling by setting the internal flags.
@@ -44,11 +73,29 @@ func (connector *Connector) SetChannelLength(l uint) {
 // Start a Kafka Consumer with the specified parameters. Its output will be
 // available in the channel returned by ConsumerChannel.
 func (connector *Connector) StartConsumer(broker string, topics []string, consumergroup string, offset int64) error {
+	var err error
 	if !connector.manualErrFlag && connector.manualErrSignal == nil {
 		connector.manualErrSignal = make(chan bool)
 	}
 	brokers := strings.Split(broker, ",")
 	consConf := cluster.NewConfig()
+	// Enable TLS
+	rootCAs, err := x509.SystemCertPool()
+	if err != nil {
+		log.Println("TLS Error:", err)
+		return err
+	}
+	consConf.Net.TLS.Enable = true
+	consConf.Net.TLS.Config = &tls.Config{RootCAs: rootCAs}
+
+	consConf.Net.SASL.Enable = true
+	if connector.user == "" && connector.pass == "" {
+		log.Println("No Auth information is set. Assuming anonymous auth...")
+		connector.SetAuthAnon()
+	}
+	consConf.Net.SASL.User = connector.user
+	consConf.Net.SASL.Password = connector.pass
+
 	// Enable these unconditionally.
 	consConf.Consumer.Return.Errors = true
 	consConf.Group.Return.Notifications = true
@@ -57,12 +104,12 @@ func (connector *Connector) StartConsumer(broker string, topics []string, consum
 	consConf.Consumer.Offsets.Initial = offset
 
 	// everything declared and configured, lets go
-	var err error
+	log.Printf("Trying to connect to Kafka as SASL/PLAIN user '%s'...", consConf.Net.SASL.User)
 	connector.consumer, err = cluster.NewConsumer(brokers, consumergroup, topics, consConf)
 	if err != nil {
 		return err
 	}
-	log.Println("Kafka connection established.")
+	log.Println("Kafka TLS connection established.")
 
 	// start message handling in background
 	connector.consumerChannel = make(chan *flow.FlowMessage, connector.channelLength)
@@ -98,16 +145,33 @@ func (connector *Connector) StartConsumer(broker string, topics []string, consum
 // Start a Kafka Producer with the specified parameters. The channel returned
 // by ProducerChannel will be accepting your input.
 func (connector *Connector) StartProducer(broker string, topic string) error {
+	var err error
 	if !connector.manualErrFlag && connector.manualErrSignal == nil {
 		connector.manualErrSignal = make(chan bool)
 	}
 	brokers := strings.Split(broker, ",")
 	prodConf := sarama.NewConfig()
+	// Enable TLS
+	rootCAs, err := x509.SystemCertPool()
+	if err != nil {
+		log.Println("TLS Error:", err)
+		return err
+	}
+	prodConf.Net.TLS.Enable = true
+	prodConf.Net.TLS.Config = &tls.Config{RootCAs: rootCAs}
+
+	prodConf.Net.SASL.Enable = true
+	if connector.user == "" && connector.pass == "" {
+		log.Println("No Auth information is set. Assuming anonymous auth...")
+		connector.SetAuthAnon()
+	}
+	prodConf.Net.SASL.User = connector.user
+	prodConf.Net.SASL.Password = connector.pass
+
 	prodConf.Producer.Return.Successes = false // this would block until we've read the ACK
 	prodConf.Producer.Return.Errors = true
 
 	// everything declared and configured, lets go
-	var err error
 	connector.producer, err = sarama.NewAsyncProducer(brokers, prodConf)
 	if err != nil {
 		return err
