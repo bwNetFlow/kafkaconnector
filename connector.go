@@ -89,6 +89,10 @@ func (connector *Connector) StartConsumer(broker string, topics []string, consum
 	consConf.Net.TLS.Config = &tls.Config{RootCAs: rootCAs}
 
 	consConf.Net.SASL.Enable = true
+	if connector.user == "" && connector.pass == "" {
+		log.Println("No Auth information is set. Assuming anonymous auth...")
+		connector.SetAuthAnon()
+	}
 	consConf.Net.SASL.User = connector.user
 	consConf.Net.SASL.Password = connector.pass
 
@@ -141,16 +145,33 @@ func (connector *Connector) StartConsumer(broker string, topics []string, consum
 // Start a Kafka Producer with the specified parameters. The channel returned
 // by ProducerChannel will be accepting your input.
 func (connector *Connector) StartProducer(broker string, topic string) error {
+	var err error
 	if !connector.manualErrFlag && connector.manualErrSignal == nil {
 		connector.manualErrSignal = make(chan bool)
 	}
 	brokers := strings.Split(broker, ",")
 	prodConf := sarama.NewConfig()
+	// Enable TLS
+	rootCAs, err := x509.SystemCertPool()
+	if err != nil {
+		log.Println("TLS Error:", err)
+		return err
+	}
+	prodConf.Net.TLS.Enable = true
+	prodConf.Net.TLS.Config = &tls.Config{RootCAs: rootCAs}
+
+	prodConf.Net.SASL.Enable = true
+	if connector.user == "" && connector.pass == "" {
+		log.Println("No Auth information is set. Assuming anonymous auth...")
+		connector.SetAuthAnon()
+	}
+	prodConf.Net.SASL.User = connector.user
+	prodConf.Net.SASL.Password = connector.pass
+
 	prodConf.Producer.Return.Successes = false // this would block until we've read the ACK
 	prodConf.Producer.Return.Errors = true
 
 	// everything declared and configured, lets go
-	var err error
 	connector.producer, err = sarama.NewAsyncProducer(brokers, prodConf)
 	if err != nil {
 		return err
