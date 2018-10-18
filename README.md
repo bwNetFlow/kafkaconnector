@@ -6,7 +6,8 @@ Example Usage:
 package main
 
 import (
-	"log"
+	"fmt"
+
 	"github.com/Shopify/sarama"
 	kafka "omi-gitlab.e-technik.uni-ulm.de/bwnetflow/kafka/kafkaconnector"
 )
@@ -14,7 +15,8 @@ import (
 var kafkaConn = kafka.Connector{}
 
 func main() {
-    log.Printf("Let's go ...")
+
+	fmt.Printf("welcome ... let's go!\n")
 
 	// connect to the BelWue Kafka cluster
 	broker := "127.0.0.1:9092,[::1]:9092" // TODO: set valid uris
@@ -31,9 +33,7 @@ func main() {
 		// process the flow here ...
 		flowCounter++
 		byteCounter += flow.GetBytes()
-		if flowCounter%1000000 == 0 {
-			log.Printf("flows / bytes: %d / %d GB\n", flowCounter, byteCounter/1024/1024/1024)
-		}
+		fmt.Printf("\rflows: %d, bytes: %d GB", flowCounter, byteCounter/1024/1024/1024)
 	}
 
 }
