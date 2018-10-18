@@ -7,7 +7,6 @@ package main
 
 import (
 	"log"
-
 	"github.com/Shopify/sarama"
 	kafka "omi-gitlab.e-technik.uni-ulm.de/bwnetflow/kafka/kafkaconnector"
 )
@@ -15,11 +14,12 @@ import (
 var kafkaConn = kafka.Connector{}
 
 func main() {
+    log.Printf("Let's go ...")
 
 	// connect to the BelWue Kafka cluster
 	broker := "127.0.0.1:9092,[::1]:9092" // TODO: set valid uris
-	topic := "flow-messages-enriched"
-	consumerGroup := "example-consumer"
+	topic := []string{"flow-messages-anon"}
+	consumerGroup := "anon-golang-example"
 	kafkaConn.StartConsumer(broker, topic, consumerGroup, sarama.OffsetNewest)
 	kafkaConn.SetAuthAnon()
 	defer kafkaConn.Close()
@@ -38,3 +38,12 @@ func main() {
 
 }
 ```
+
+## Step by step guide
+
+ * Make sure you have golang installed
+ * Make new directory "go-example", and place file a `client.go` with the above listed code snippet in it
+ * Inside "go-example" run `go get ./...` to download the dependencies (will be downloaded to the path $GOPATH)
+ * Inside "go-example" run `go run client.go` to execute the example
+ 
+ 
