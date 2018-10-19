@@ -2,7 +2,7 @@
 
 Example Usage:
 
-```
+```go
 package main
 
 import (
