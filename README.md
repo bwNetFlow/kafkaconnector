@@ -22,8 +22,8 @@ func main() {
 	broker := "127.0.0.1:9092,[::1]:9092" // TODO: set valid uris
 	topic := []string{"flow-messages-anon"}
 	consumerGroup := "anon-golang-example"
+	kafkaConn.SetAuthAnon() // optionally: change to SetAuthFromEnv() or SetAuth(user string, pass string)
 	kafkaConn.StartConsumer(broker, topic, consumerGroup, sarama.OffsetNewest)
-	kafkaConn.SetAuthAnon()
 	defer kafkaConn.Close()
 
 	// receive flows: e.g. count flows & bytes
