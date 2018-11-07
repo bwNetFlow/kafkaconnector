@@ -135,12 +135,14 @@ func (connector *Connector) StartConsumer(broker string, topics []string, consum
 				case msg, ok := <-connector.consumer.Errors():
 					if !ok {
 						running = false
+						log.Println("Kafka Consumer Error: Channel Closed.")
 						continue
 					}
 					log.Printf("Kafka Consumer Error: %s\n", msg.Error())
 				case msg, ok := <-connector.consumer.Notifications():
 					if !ok {
 						running = false
+						log.Println("Kafka Consumer Notification: Channel Closed.")
 						continue
 					}
 					log.Printf("Kafka Consumer Notification: %+v\n", msg)
@@ -188,6 +190,7 @@ func (connector *Connector) StartProducer(broker string, topic string) error {
 	if err != nil {
 		return err
 	}
+	log.Println("Kafka TLS connection established.")
 
 	// start message handling in background
 	connector.producerChannel = make(chan *flow.FlowMessage, connector.channelLength)
@@ -201,6 +204,7 @@ func (connector *Connector) StartProducer(broker string, topic string) error {
 				case msg, ok := <-connector.producer.Errors():
 					if !ok {
 						running = false
+						log.Println("Kafka Producer Error: Channel Closed.")
 						continue
 					}
 					log.Printf("Kafka Producer Error: %s\n", msg.Error())
