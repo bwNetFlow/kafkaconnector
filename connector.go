@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/Shopify/sarama"
 	cluster "github.com/bsm/sarama-cluster"
@@ -15,18 +16,28 @@ import (
 
 // Connector handles a connection to read bwNetFlow flows from kafka.
 type Connector struct {
-	user            string
-	pass            string
-	consumer        *cluster.Consumer
-	producer        sarama.AsyncProducer
-	consumerChannel chan *flow.FlowMessage
-	producerChannel chan *flow.FlowMessage
-	manualErrFlag   bool
-	manualErrSignal chan bool
-	channelLength   uint
+	user                       string
+	pass                       string
+	consumer                   *cluster.Consumer
+	producer                   sarama.AsyncProducer
+	consumerChannel            chan *flow.FlowMessage
+	hasConsumerControlListener bool
+	consumerControlChannel     chan ConsumerControlMessage
+	producerChannel            chan *flow.FlowMessage
+	manualErrFlag              bool
+	manualErrSignal            chan bool
+	channelLength              uint
 }
 
-// Explicitly set which login to use in SASL/PLAIN auth via TLS
+// ConsumerControlMessage takes the control params of *sarama.ConsumerMessage
+type ConsumerControlMessage struct {
+	Partition      int32
+	Offset         int64
+	Timestamp      time.Time // only set if kafka is version 0.10+, inner message timestamp
+	BlockTimestamp time.Time // only set if kafka is version 0.10+, outer (compressed) block timestamp
+}
+
+// SetAuth explicitly set which login to use in SASL/PLAIN auth via TLS
 func (connector *Connector) SetAuth(user string, pass string) {
 	connector.user = user
 	connector.pass = pass
@@ -113,7 +124,8 @@ func (connector *Connector) StartConsumer(broker string, topics []string, consum
 
 	// start message handling in background
 	connector.consumerChannel = make(chan *flow.FlowMessage, connector.channelLength)
-	go decodeMessages(connector.consumer, connector.consumerChannel)
+	connector.consumerControlChannel = make(chan ConsumerControlMessage, connector.channelLength)
+	go decodeMessages(connector)
 	if !connector.manualErrFlag {
 		go func() {
 			log.Println("Spawned a Consumer Logger, no manual error handling.")
@@ -275,4 +287,10 @@ func (connector *Connector) ConsumerNotifications() <-chan *cluster.Notification
 // IMPORTANT: read EnableManualErrorHandling docs carefully
 func (connector *Connector) ProducerErrors() <-chan *sarama.ProducerError {
 	return connector.producer.Errors()
+}
+
+// GetConsumerControlMessages enables and returns a channel for control messages `ConsumerControlMessage`
+func (connector *Connector) GetConsumerControlMessages() <-chan ConsumerControlMessage {
+	connector.hasConsumerControlListener = true
+	return connector.consumerControlChannel
 }

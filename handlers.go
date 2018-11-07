@@ -4,28 +4,41 @@ import (
 	"log"
 
 	"github.com/Shopify/sarama"
-	cluster "github.com/bsm/sarama-cluster"
 	"github.com/gogo/protobuf/proto"
 	flow "omi-gitlab.e-technik.uni-ulm.de/bwnetflow/bwnetflow_api/go"
 )
 
 // Decode Kafka Messages using our API definition
-func decodeMessages(consumer *cluster.Consumer, dst chan *flow.FlowMessage) {
+func decodeMessages(connector *Connector) {
 	for {
-		msg, ok := <-consumer.Messages()
+		msg, ok := <-connector.consumer.Messages()
+		ctrlMsg := ConsumerControlMessage{
+			Partition:      msg.Partition,
+			Offset:         msg.Offset,
+			Timestamp:      msg.Timestamp,
+			BlockTimestamp: msg.BlockTimestamp,
+		}
 		if !ok {
-			log.Println("Message channel closed.")
-			close(dst)
+			log.Printf("Message channel closed. (%+v)\n", ctrlMsg)
+			close(connector.consumerChannel)
+			close(connector.consumerControlChannel)
 			break
 		}
-		consumer.MarkOffset(msg, "") // mark message as processed
+
+		// decode message
+		connector.consumer.MarkOffset(msg, "") // mark message as processed
 		flowMsg := new(flow.FlowMessage)
 		err := proto.Unmarshal(msg.Value, flowMsg)
 		if err != nil {
 			log.Printf("Received broken message. Unmarshalling error: %v", err)
 			continue
 		}
-		dst <- flowMsg
+
+		// send messages to channels
+		connector.consumerChannel <- flowMsg
+		if connector.hasConsumerControlListener {
+			connector.consumerControlChannel <- ctrlMsg
+		}
 	}
 }
 
