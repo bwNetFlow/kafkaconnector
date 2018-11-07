@@ -294,3 +294,8 @@ func (connector *Connector) GetConsumerControlMessages() <-chan ConsumerControlM
 	connector.hasConsumerControlListener = true
 	return connector.consumerControlChannel
 }
+
+// CancelConsumerControlMessages disables the channel for control messages `ConsumerControlMessage`
+func (connector *Connector) CancelConsumerControlMessages() {
+	connector.hasConsumerControlListener = false
+}
