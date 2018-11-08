@@ -130,24 +130,28 @@ func (connector *Connector) StartConsumer(broker string, topics []string, consum
 		go func() {
 			log.Println("Spawned a Consumer Logger, no manual error handling.")
 			running := true
+			errors := connector.consumer.Errors()
+			notifications := connector.consumer.Notifications()
 			for running {
 				select {
-				case msg, ok := <-connector.consumer.Errors():
+				case msg, ok := <-errors:
 					if !ok {
-						running = false
+						errors = nil // nil channels are never selected
 						log.Println("Kafka Consumer Error: Channel Closed.")
-						continue
 					}
 					log.Printf("Kafka Consumer Error: %s\n", msg.Error())
-				case msg, ok := <-connector.consumer.Notifications():
+				case msg, ok := <-notifications:
 					if !ok {
-						running = false
+						notifications = nil // nil channels are never selected
 						log.Println("Kafka Consumer Notification: Channel Closed.")
-						continue
 					}
 					log.Printf("Kafka Consumer Notification: %+v\n", msg)
 				case _, ok := <-connector.manualErrSignal:
 					running = ok
+				}
+				if errors == nil && notifications == nil {
+					log.Println("Consumer Logger: All upstream channels are closed.")
+					break
 				}
 			}
 			log.Println("Consumer Logger terminated.")

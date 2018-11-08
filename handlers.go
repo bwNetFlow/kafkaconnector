@@ -20,8 +20,9 @@ func decodeMessages(connector *Connector) {
 		}
 		if !ok {
 			log.Printf("Message channel closed. (%+v)\n", ctrlMsg)
-			close(connector.consumerChannel)
-			close(connector.consumerControlChannel)
+			// pass to clients using this lib
+			close(connector.consumerChannel)        // content
+			close(connector.consumerControlChannel) // monitoring
 			break
 		}
 
