@@ -12,27 +12,31 @@ import (
 func decodeMessages(connector *Connector) {
 	for {
 		msg, ok := <-connector.consumer.Messages()
-		ctrlMsg := ConsumerControlMessage{
-			Partition:      msg.Partition,
-			Offset:         msg.Offset,
-			Timestamp:      msg.Timestamp,
-			BlockTimestamp: msg.BlockTimestamp,
-		}
 		if !ok {
-			log.Printf("Message channel closed. (%+v)\n", ctrlMsg)
+			log.Println("Message channel closed.")
 			// pass to clients using this lib
 			close(connector.consumerChannel)        // content
 			close(connector.consumerControlChannel) // monitoring
 			break
 		}
 
-		// decode message
+		// ACK message
 		connector.consumer.MarkOffset(msg, "") // mark message as processed
+
+		// decode message content
 		flowMsg := new(flow.FlowMessage)
 		err := proto.Unmarshal(msg.Value, flowMsg)
 		if err != nil {
 			log.Printf("Received broken message. Unmarshalling error: %v", err)
 			continue
+		}
+
+		// decode message metadata
+		ctrlMsg := ConsumerControlMessage{
+			Partition:      msg.Partition,
+			Offset:         msg.Offset,
+			Timestamp:      msg.Timestamp,
+			BlockTimestamp: msg.BlockTimestamp,
 		}
 
 		// send messages to channels
