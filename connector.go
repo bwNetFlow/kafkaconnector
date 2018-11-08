@@ -138,14 +138,16 @@ func (connector *Connector) StartConsumer(broker string, topics []string, consum
 					if !ok {
 						errors = nil // nil channels are never selected
 						log.Println("Kafka Consumer Error: Channel Closed.")
+					} else {
+						log.Printf("Kafka Consumer Error: %s\n", msg.Error())
 					}
-					log.Printf("Kafka Consumer Error: %s\n", msg.Error())
 				case msg, ok := <-notifications:
 					if !ok {
 						notifications = nil // nil channels are never selected
 						log.Println("Kafka Consumer Notification: Channel Closed.")
+					} else {
+						log.Printf("Kafka Consumer Notification: %+v\n", msg)
 					}
-					log.Printf("Kafka Consumer Notification: %+v\n", msg)
 				case _, ok := <-connector.manualErrSignal:
 					running = ok
 				}
