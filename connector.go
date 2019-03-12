@@ -23,7 +23,7 @@ type Connector struct {
 	consumerChannel            chan *flow.FlowMessage
 	hasConsumerControlListener bool
 	consumerControlChannel     chan ConsumerControlMessage
-	producerChannel            chan *flow.FlowMessage
+	producerChannels           map[string](chan *flow.FlowMessage)
 	manualErrFlag              bool
 	manualErrSignal            chan bool
 	channelLength              uint
@@ -164,7 +164,7 @@ func (connector *Connector) StartConsumer(broker string, topics []string, consum
 
 // Start a Kafka Producer with the specified parameters. The channel returned
 // by ProducerChannel will be accepting your input.
-func (connector *Connector) StartProducer(broker string, topic string) error {
+func (connector *Connector) StartProducer(broker string) error {
 	var err error
 	if !connector.manualErrFlag && connector.manualErrSignal == nil {
 		connector.manualErrSignal = make(chan bool)
@@ -191,6 +191,7 @@ func (connector *Connector) StartProducer(broker string, topic string) error {
 	prodConf.Producer.Return.Successes = false // this would block until we've read the ACK
 	prodConf.Producer.Return.Errors = true
 
+	connector.producerChannels = make(map[string](chan *flow.FlowMessage))
 	// everything declared and configured, lets go
 	connector.producer, err = sarama.NewAsyncProducer(brokers, prodConf)
 	if err != nil {
@@ -199,8 +200,6 @@ func (connector *Connector) StartProducer(broker string, topic string) error {
 	log.Println("Kafka Producer TLS connection established.")
 
 	// start message handling in background
-	connector.producerChannel = make(chan *flow.FlowMessage, connector.channelLength)
-	go encodeMessages(connector.producer, topic, connector.producerChannel)
 	if !connector.manualErrFlag {
 		go func() {
 			log.Println("Spawned a Producer Logger, no manual error handling.")
@@ -226,6 +225,7 @@ func (connector *Connector) StartProducer(broker string, topic string) error {
 
 // Close closes the connection to kafka, i.e. Consumer and Producer
 func (connector *Connector) Close() {
+	log.Println("Kafka Connector Close method called.")
 	if connector.consumer != nil {
 		connector.consumer.Close()
 		log.Println("Kafka Consumer connection closed.")
@@ -238,6 +238,7 @@ func (connector *Connector) Close() {
 
 // Close the Kafka Consumer specifically.
 func (connector *Connector) CloseConsumer() {
+	log.Println("Kafka Connector CloseConsumer method called.")
 	if connector.consumer != nil {
 		connector.consumer.Close()
 		log.Println("Kafka Consumer connection closed.")
@@ -248,6 +249,11 @@ func (connector *Connector) CloseConsumer() {
 
 // Close the Kafka Producer specifically.
 func (connector *Connector) CloseProducer() {
+	log.Println("Kafka Connector CloseProducer method called.")
+	for topic, channel := range connector.producerChannels {
+		log.Printf("Kafka Producer: Closed producer channel for topic %s.\n", topic)
+		close(channel)
+	}
 	if connector.producer != nil {
 		connector.producer.Close()
 		log.Println("Kafka Producer connection closed.")
@@ -266,8 +272,13 @@ func (connector *Connector) ConsumerChannel() <-chan *flow.FlowMessage {
 
 // Return the channel used for handing over Flows to the Kafka Producer.
 // If writing to this channel blocks, check the log.
-func (connector *Connector) ProducerChannel() chan *flow.FlowMessage {
-	return connector.producerChannel
+func (connector *Connector) ProducerChannel(topic string) chan *flow.FlowMessage {
+	if channel, initialized := connector.producerChannels[topic]; initialized {
+		return channel
+	}
+	connector.producerChannels[topic] = make(chan *flow.FlowMessage, connector.channelLength)
+	go encodeMessages(connector.producer, topic, connector.producerChannels[topic])
+	return connector.producerChannels[topic]
 }
 
 // Consumer Errors relayed directly from the Kafka Cluster.

@@ -13,7 +13,7 @@ func decodeMessages(connector *Connector) {
 	for {
 		msg, ok := <-connector.consumer.Messages()
 		if !ok {
-			log.Println("Message channel closed.")
+			log.Println("decodeMessages: Consumer Message channel closed.")
 			// pass to clients using this lib
 			close(connector.consumerChannel)        // content
 			close(connector.consumerControlChannel) // monitoring
@@ -27,7 +27,7 @@ func decodeMessages(connector *Connector) {
 		flowMsg := new(flow.FlowMessage)
 		err := proto.Unmarshal(msg.Value, flowMsg)
 		if err != nil {
-			log.Printf("Received broken message. Unmarshalling error: %v", err)
+			log.Printf("decodeMessages: Received broken message: %v", err)
 			continue
 		}
 
@@ -52,7 +52,7 @@ func encodeMessages(producer sarama.AsyncProducer, topic string, src <-chan *flo
 	for {
 		binary, err := proto.Marshal(<-src)
 		if err != nil {
-			log.Printf("Could not encode message. Marshalling error: %v", err)
+			log.Printf("encodeMessages: Could not encode message: %v", err)
 			continue
 		}
 		producer.Input() <- &sarama.ProducerMessage{
