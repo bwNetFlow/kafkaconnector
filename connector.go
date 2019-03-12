@@ -120,7 +120,7 @@ func (connector *Connector) StartConsumer(broker string, topics []string, consum
 	if err != nil {
 		return err
 	}
-	log.Println("Kafka TLS connection established.")
+	log.Println("Kafka Consumer TLS connection established.")
 
 	// start message handling in background
 	connector.consumerChannel = make(chan *flow.FlowMessage, connector.channelLength)
@@ -196,7 +196,7 @@ func (connector *Connector) StartProducer(broker string, topic string) error {
 	if err != nil {
 		return err
 	}
-	log.Println("Kafka TLS connection established.")
+	log.Println("Kafka Producer TLS connection established.")
 
 	// start message handling in background
 	connector.producerChannel = make(chan *flow.FlowMessage, connector.channelLength)
