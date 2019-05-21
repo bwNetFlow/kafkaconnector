@@ -1,3 +1,7 @@
+[![Build Status](https://travis-ci.org/bwNetFlow/kafkaconnector.svg)](https://travis-ci.org/bwNetFlow/kafkaconnector)
+[![Go Report Card](https://goreportcard.com/badge/github.com/bwNetFlow/kafkaconnector)](https://goreportcard.com/report/github.com/bwNetFlow/kafkaconnector)
+[![GoDoc](https://godoc.org/github.com/bwNetFlow/kafkaconnector?status.svg)](https://godoc.org/github.com/bwNetFlow/kafkaconnector)
+
 # bwNetFlow Go Kafka Connector
 
 Example Usage:
