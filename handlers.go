@@ -4,8 +4,8 @@ import (
 	"log"
 
 	"github.com/Shopify/sarama"
+	flow "github.com/bwNetFlow/protobuf/go"
 	"github.com/gogo/protobuf/proto"
-	flow "omi-gitlab.e-technik.uni-ulm.de/bwnetflow/bwnetflow_api/go"
 )
 
 // Decode Kafka Messages using our API definition

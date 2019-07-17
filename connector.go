@@ -11,7 +11,7 @@ import (
 
 	"github.com/Shopify/sarama"
 	cluster "github.com/bsm/sarama-cluster"
-	flow "omi-gitlab.e-technik.uni-ulm.de/bwnetflow/bwnetflow_api/go"
+	flow "github.com/bwNetFlow/protobuf/go"
 )
 
 // Connector handles a connection to read bwNetFlow flows from kafka.
