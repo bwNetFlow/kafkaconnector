@@ -2,14 +2,13 @@ package flowfilter
 
 import (
 	"fmt"
+	"github.com/bwNetFlow/ip_prefix_trie"
+	flow "github.com/bwNetFlow/protobuf/go"
 	"log"
 	"net"
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/bwNetFlow/ip_prefix_trie"
-	flow "github.com/bwNetFlow/protobuf/go"
 )
 
 func NewFlowFilter(cids string, ipv4s string, ipv6s string, peers string) *FlowFilter {
