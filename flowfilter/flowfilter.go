@@ -96,9 +96,9 @@ func (flowFilter *FlowFilter) FilterApplies(flow *flow.FlowMessage) bool {
 	// customerID filter
 	if len(flowFilter.validCustomerIDs) == 0 || flowFilter.isValidCustomerID(int(flow.GetCid())) {
 		// IP subnet filter
-		if !flowFilter.ipFilterSet || flowFilter.isValidIP(flow.GetSrcIP()) || flowFilter.isValidIP(flow.GetDstIP()) {
+		if !flowFilter.ipFilterSet || flowFilter.isValidIP(flow.GetSrcAddr()) || flowFilter.isValidIP(flow.GetDstAddr()) {
 			// peer filter
-			if len(flowFilter.validPeers) == 0 || flowFilter.isValidPeer(flow.GetPeer()) {
+			if len(flowFilter.validPeers) == 0 || flowFilter.isValidPeer(flow.GetSrcIfDesc()) || flowFilter.isValidPeer(flow.GetDstIfDesc()) {
 				return true
 			}
 		}
