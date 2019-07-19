@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	flow "omi-gitlab.e-technik.uni-ulm.de/bwnetflow/bwnetflow_api/go"
-	"omi-gitlab.e-technik.uni-ulm.de/bwnetflow/ip_prefix_trie"
+	"github.com/bwNetFlow/ip_prefix_trie"
+	flow "github.com/bwNetFlow/protobuf/go"
 )
 
 func NewFlowFilter(cids string, ipv4s string, ipv6s string, peers string) *FlowFilter {

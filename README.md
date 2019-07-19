@@ -13,7 +13,7 @@ import (
 	"fmt"
 
 	"github.com/Shopify/sarama"
-	kafka "omi-gitlab.e-technik.uni-ulm.de/bwnetflow/kafka/kafkaconnector"
+	kafka "github.com/bwNetFlow/kafka/kafkaconnector"
 )
 
 var kafkaConn = kafka.Connector{}
@@ -50,7 +50,7 @@ func main() {
  * Inside "go-example" run `go get ./...` to download the dependencies (will be downloaded to the path $GOPATH)
  * Inside "go-example" run `go run client.go` to execute the example from source code
  * If you want to build a binary, run `go build client.go` which produces the "client" binary (run it with `./client`)
- 
+
 ## flowfilter
 
 The kafkaconnector contains also an optional flowfilter, which allows to filter for customer ID, IP address (ranges) and peers. Example usage:
