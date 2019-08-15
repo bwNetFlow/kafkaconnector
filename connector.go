@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -27,6 +28,8 @@ type Connector struct {
 	manualErrFlag              bool
 	manualErrSignal            chan bool
 	channelLength              uint
+	authDisable                bool
+	tlsDisable                 bool
 }
 
 // ConsumerControlMessage takes the control params of *sarama.ConsumerMessage
@@ -35,6 +38,16 @@ type ConsumerControlMessage struct {
 	Offset         int64
 	Timestamp      time.Time // only set if kafka is version 0.10+, inner message timestamp
 	BlockTimestamp time.Time // only set if kafka is version 0.10+, outer (compressed) block timestamp
+}
+
+// DisableAuth disables authentification
+func (connector *Connector) DisableAuth() {
+	connector.authDisable = true
+}
+
+// DisableTLS disables ssl/tls connection
+func (connector *Connector) DisableTLS() {
+	connector.tlsDisable = true
 }
 
 // SetAuth explicitly set which login to use in SASL/PLAIN auth via TLS
@@ -90,22 +103,26 @@ func (connector *Connector) StartConsumer(broker string, topics []string, consum
 	}
 	brokers := strings.Split(broker, ",")
 	consConf := cluster.NewConfig()
-	// Enable TLS
-	rootCAs, err := x509.SystemCertPool()
-	if err != nil {
-		log.Println("TLS Error:", err)
-		return err
+	if !connector.tlsDisable {
+		// Enable TLS
+		rootCAs, err := x509.SystemCertPool()
+		if err != nil {
+			log.Println("TLS Error:", err)
+			return err
+		}
+		consConf.Net.TLS.Enable = true
+		consConf.Net.TLS.Config = &tls.Config{RootCAs: rootCAs}
 	}
-	consConf.Net.TLS.Enable = true
-	consConf.Net.TLS.Config = &tls.Config{RootCAs: rootCAs}
 
-	consConf.Net.SASL.Enable = true
-	if connector.user == "" && connector.pass == "" {
-		log.Println("No Auth information is set. Assuming anonymous auth...")
-		connector.SetAuthAnon()
+	if !connector.authDisable {
+		consConf.Net.SASL.Enable = true
+		if connector.user == "" && connector.pass == "" {
+			log.Println("No Auth information is set. Assuming anonymous auth...")
+			connector.SetAuthAnon()
+		}
+		consConf.Net.SASL.User = connector.user
+		consConf.Net.SASL.Password = connector.pass
 	}
-	consConf.Net.SASL.User = connector.user
-	consConf.Net.SASL.Password = connector.pass
 
 	// Enable these unconditionally.
 	consConf.Consumer.Return.Errors = true
@@ -115,7 +132,15 @@ func (connector *Connector) StartConsumer(broker string, topics []string, consum
 	consConf.Consumer.Offsets.Initial = offset
 
 	// everything declared and configured, lets go
-	log.Printf("Trying to connect to Kafka as SASL/PLAIN user '%s'...", consConf.Net.SASL.User)
+	tlslog := fmt.Sprintf("without tls (!)")
+	if !connector.tlsDisable {
+		tlslog = fmt.Sprintf("with tls")
+	}
+	authlog := fmt.Sprintf("without authentication (!)")
+	if !connector.authDisable {
+		authlog = fmt.Sprintf("with user %s", connector.user)
+	}
+	log.Printf("Trying to connect to Kafka %s %s %s", broker, tlslog, authlog)
 	connector.consumer, err = cluster.NewConsumer(brokers, consumergroup, topics, consConf)
 	if err != nil {
 		return err
