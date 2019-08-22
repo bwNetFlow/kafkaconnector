@@ -13,7 +13,7 @@ import (
 	"fmt"
 
 	"github.com/Shopify/sarama"
-	kafka "github.com/bwNetFlow/kafka/kafkaconnector"
+	kafka "github.com/bwNetFlow/kafkaconnector"
 )
 
 var kafkaConn = kafka.Connector{}
