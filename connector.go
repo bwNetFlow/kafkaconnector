@@ -196,22 +196,27 @@ func (connector *Connector) StartProducer(broker string) error {
 	}
 	brokers := strings.Split(broker, ",")
 	prodConf := sarama.NewConfig()
-	// Enable TLS
-	rootCAs, err := x509.SystemCertPool()
-	if err != nil {
-		log.Println("TLS Error:", err)
-		return err
+	
+	if !connector.tlsDisable {
+		// Enable TLS
+		rootCAs, err := x509.SystemCertPool()
+		if err != nil {
+			log.Println("TLS Error:", err)
+			return err
+		}
+		prodConf.Net.TLS.Enable = true
+		prodConf.Net.TLS.Config = &tls.Config{RootCAs: rootCAs}
 	}
-	prodConf.Net.TLS.Enable = true
-	prodConf.Net.TLS.Config = &tls.Config{RootCAs: rootCAs}
 
-	prodConf.Net.SASL.Enable = true
-	if connector.user == "" && connector.pass == "" {
-		log.Println("No Auth information is set. Assuming anonymous auth...")
-		connector.SetAuthAnon()
+	if !connector.authDisable {
+		prodConf.Net.SASL.Enable = true
+		if connector.user == "" && connector.pass == "" {
+			log.Println("No Auth information is set. Assuming anonymous auth...")
+			connector.SetAuthAnon()
+		}
+		prodConf.Net.SASL.User = connector.user
+		prodConf.Net.SASL.Password = connector.pass
 	}
-	prodConf.Net.SASL.User = connector.user
-	prodConf.Net.SASL.Password = connector.pass
 
 	prodConf.Producer.Return.Successes = false // this would block until we've read the ACK
 	prodConf.Producer.Return.Errors = true
