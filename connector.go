@@ -5,19 +5,23 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
-	"os/signal"
-	"sync"
-	"syscall"
-	// "fmt"
 	"log"
 	"os"
+	"os/signal"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/Shopify/sarama"
 
 	flow "github.com/bwNetFlow/protobuf/go"
 	"github.com/gogo/protobuf/proto"
+
+	prometheusmetrics "github.com/deathowl/go-metrics-prometheus"
+	prometheus "github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"net/http"
 )
 
 // Connector handles a connection to read bwNetFlow flows from kafka.
@@ -30,14 +34,7 @@ type Connector struct {
 	producerChannels map[string](chan *flow.FlowMessage)
 	authDisable      bool
 	tlsDisable       bool
-}
-
-// ConsumerControlMessage takes the control params of *sarama.ConsumerMessage
-type ConsumerControlMessage struct {
-	Partition      int32
-	Offset         int64
-	Timestamp      time.Time // only set if kafka is version 0.10+, inner message timestamp
-	BlockTimestamp time.Time // only set if kafka is version 0.10+, outer (compressed) block timestamp
+	prometheusEnable bool
 }
 
 // DisableAuth disables authentification
@@ -50,10 +47,21 @@ func (connector *Connector) DisableTLS() {
 	connector.tlsDisable = true
 }
 
+// EnablePrometheus enables metric exporter for both, Consumer and Producer
+func (connector *Connector) EnablePrometheus() {
+	connector.prometheusEnable = true
+}
+
 // SetAuth explicitly set which login to use in SASL/PLAIN auth via TLS
 func (connector *Connector) SetAuth(user string, pass string) {
 	connector.user = user
 	connector.pass = pass
+}
+
+// Set anonymous credentials as login method.
+func (connector *Connector) SetAuthAnon() {
+	connector.user = "anon"
+	connector.pass = "anon"
 }
 
 // Check environment to infer which login to use in SASL/PLAIN auth via TLS
@@ -67,25 +75,9 @@ func (connector *Connector) SetAuthFromEnv() error {
 	return nil
 }
 
-// Set anonymous credentials as login method.
-func (connector *Connector) SetAuthAnon() {
-	connector.user = "anon"
-	connector.pass = "anon"
-}
-
-// Start a Kafka Consumer with the specified parameters. Its output will be
-// available in the channel returned by ConsumerChannel.
-func (connector *Connector) StartConsumer(brokers string, topics []string, group string, offset int64) error {
-	var err error
+// EnablePrometheus enables metric exporter for both, Consumer and Producer
+func (connector *Connector) NewBaseConfig() *sarama.Config {
 	config := sarama.NewConfig()
-	version, err := sarama.ParseKafkaVersion("2.4.0") // TODO: get somewhere
-	if err != nil {
-		log.Panicf("Error parsing Kafka version: %v", err)
-	}
-	config.Version = version
-	config.Consumer.Group.Rebalance.Strategy = sarama.BalanceStrategySticky
-	config.Consumer.Offsets.Initial = offset
-
 	if !connector.tlsDisable {
 		// Enable TLS
 		rootCAs, err := x509.SystemCertPool()
@@ -107,9 +99,27 @@ func (connector *Connector) StartConsumer(brokers string, topics []string, group
 		config.Net.SASL.Password = connector.pass
 	}
 
-	// Enable these unconditionally. TODO: check for analog in new lib
-	// consConf.Consumer.Return.Errors = true
-	// consConf.Group.Return.Notifications = true
+	return config
+}
+
+// Start a Kafka Consumer with the specified parameters. Its output will be
+// available in the channel returned by ConsumerChannel.
+func (connector *Connector) StartConsumer(brokers string, topics []string, group string, offset int64) error {
+	var err error
+	config := connector.NewBaseConfig()
+	version, err := sarama.ParseKafkaVersion("2.4.0") // TODO: get somewhere
+	if err != nil {
+		log.Panicf("Error parsing Kafka version: %v", err)
+	}
+	if connector.prometheusEnable {
+		prometheusClient := prometheusmetrics.NewPrometheusProvider(config.MetricRegistry, "sarama", "consumer", prometheus.DefaultRegisterer, 14*time.Second)
+		go prometheusClient.UpdatePrometheusMetrics()
+		http.Handle("/metrics", promhttp.Handler())
+		go http.ListenAndServe(":2112", nil)
+	}
+	config.Version = version
+	config.Consumer.Group.Rebalance.Strategy = sarama.BalanceStrategySticky
+	config.Consumer.Offsets.Initial = offset
 
 	// everything declared and configured, lets go
 	log.Printf("Trying to connect to Kafka %s", brokers)
@@ -169,35 +179,20 @@ func (connector *Connector) StartConsumer(brokers string, topics []string, group
 func (connector *Connector) StartProducer(broker string) error {
 	var err error
 	brokers := strings.Split(broker, ",")
-	config := sarama.NewConfig()
+	config := connector.NewBaseConfig()
 
-	if !connector.tlsDisable {
-		// Enable TLS
-		rootCAs, err := x509.SystemCertPool()
-		if err != nil {
-			log.Println("TLS Error:", err)
-			return err
-		}
-		config.Net.TLS.Enable = true
-		config.Net.TLS.Config = &tls.Config{RootCAs: rootCAs}
-	}
-
-	if !connector.authDisable {
-		config.Net.SASL.Enable = true
-		if connector.user == "" && connector.pass == "" {
-			log.Println("No Auth information is set. Assuming anonymous auth...")
-			connector.SetAuthAnon()
-		}
-		config.Net.SASL.User = connector.user
-		config.Net.SASL.Password = connector.pass
+	if connector.prometheusEnable {
+		prometheusClient := prometheusmetrics.NewPrometheusProvider(config.MetricRegistry, "sarama", "producer", prometheus.DefaultRegisterer, 14*time.Second)
+		go prometheusClient.UpdatePrometheusMetrics()
+		http.Handle("/metrics", promhttp.Handler())
+		go http.ListenAndServe(":2113", nil)
 	}
 
 	config.Producer.RequiredAcks = sarama.WaitForLocal       // Only wait for the leader to ack
 	config.Producer.Compression = sarama.CompressionSnappy   // Compress messages
 	config.Producer.Flush.Frequency = 500 * time.Millisecond // Flush batches every 500ms
-
-	config.Producer.Return.Successes = false // this would block until we've read the ACK
-	config.Producer.Return.Errors = true
+	config.Producer.Return.Successes = false                 // this would block until we've read the ACK
+	config.Producer.Return.Errors = true                     // TODO: read from producer.Errors somewhere
 
 	connector.producerChannels = make(map[string](chan *flow.FlowMessage))
 	// everything declared and configured, lets go
@@ -243,4 +238,9 @@ func (connector *Connector) ProducerChannel(topic string) chan *flow.FlowMessage
 		}
 	}()
 	return connector.producerChannels[topic]
+}
+
+func (connector *Connector) Close() {
+	close(connector.consumer.flows)
+	connector.producer.Close()
 }
