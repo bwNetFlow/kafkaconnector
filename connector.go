@@ -49,8 +49,10 @@ func (connector *Connector) DisableTLS() {
 }
 
 // EnablePrometheus enables metric exporter for both, Consumer and Producer
-func (connector *Connector) EnablePrometheus() {
+func (connector *Connector) EnablePrometheus(listen string) {
 	connector.prometheusEnable = true
+	http.Handle("/metrics", promhttp.Handler())
+	go http.ListenAndServe(listen, nil)
 }
 
 // SetAuth explicitly set which login to use in SASL/PLAIN auth via TLS
@@ -113,10 +115,8 @@ func (connector *Connector) StartConsumer(brokers string, topics []string, group
 		log.Panicf("Error parsing Kafka version: %v", err)
 	}
 	if connector.prometheusEnable {
-		prometheusClient := prometheusmetrics.NewPrometheusProvider(config.MetricRegistry, "sarama", "consumer", prometheus.DefaultRegisterer, 14*time.Second)
+		prometheusClient := prometheusmetrics.NewPrometheusProvider(config.MetricRegistry, "sarama", "consumer", prometheus.DefaultRegisterer, 10*time.Second)
 		go prometheusClient.UpdatePrometheusMetrics()
-		http.Handle("/metrics", promhttp.Handler())
-		go http.ListenAndServe(":2112", nil) // TODO: make configurable
 	}
 	config.Version = version
 	config.Consumer.Group.Rebalance.Strategy = sarama.BalanceStrategySticky
@@ -177,10 +177,8 @@ func (connector *Connector) StartProducer(broker string) error {
 	config := connector.NewBaseConfig()
 
 	if connector.prometheusEnable {
-		prometheusClient := prometheusmetrics.NewPrometheusProvider(config.MetricRegistry, "sarama", "producer", prometheus.DefaultRegisterer, 14*time.Second)
+		prometheusClient := prometheusmetrics.NewPrometheusProvider(config.MetricRegistry, "sarama", "producer", prometheus.DefaultRegisterer, 10*time.Second)
 		go prometheusClient.UpdatePrometheusMetrics()
-		http.Handle("/metrics", promhttp.Handler())
-		go http.ListenAndServe(":2113", nil) // TODO: make configurable
 	}
 
 	config.Producer.RequiredAcks = sarama.WaitForLocal       // Only wait for the leader to ack
