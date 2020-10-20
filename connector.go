@@ -127,7 +127,7 @@ func (connector *Connector) StartConsumer(brokers string, topics []string, group
 	config.Consumer.Offsets.Initial = offset
 
 	// everything declared and configured, lets go
-	log.Printf("Trying to connect to Kafka %s", brokers)
+	log.Printf("Kafka Consumer: Connecting to %s", brokers)
 	connector.consumer = &Consumer{
 		ready: make(chan bool),
 	}
@@ -136,7 +136,7 @@ func (connector *Connector) StartConsumer(brokers string, topics []string, group
 	connector.consumer.cancel = cancel
 	client, err := sarama.NewConsumerGroup(strings.Split(brokers, ","), group, config)
 	if err != nil {
-		log.Panicf("Error creating consumer group client: %v", err)
+		log.Panicf("Kafka Consumer: Error creating consumer group client: %v", err)
 	}
 
 	wg := &sync.WaitGroup{}
@@ -148,7 +148,7 @@ func (connector *Connector) StartConsumer(brokers string, topics []string, group
 			// server-side rebalance happens, the consumer session will need to be
 			// recreated to get the new claims
 			if err := client.Consume(ctx, topics, connector.consumer); err != nil {
-				log.Panicf("Error from consumer: %v", err)
+				log.Panicf("Kafka Consumer: Error consuming: %v", err)
 			}
 			// check if context was cancelled, signaling that the consumer should stop
 			if ctx.Err() != nil {
@@ -159,14 +159,14 @@ func (connector *Connector) StartConsumer(brokers string, topics []string, group
 	}()
 
 	<-connector.consumer.ready // Await till the consumer has been set up
-	log.Println("Sarama consumer up and running!...")
+	log.Println("Kafka Consumer: Connection established.")
 
 	go func() { // this is the goroutine that sticks around to close stuff
 		<-ctx.Done()
-		log.Println("terminating: context cancelled")
+		log.Println("Kafka Consumer: Terminating, waiting for partition threads...")
 		wg.Wait()
 		if err = client.Close(); err != nil {
-			log.Panicf("Error closing client: %v", err)
+			log.Panicf("Kafka Consumer: Error closing client: %v", err)
 		}
 		close(connector.consumer.flows) // signal kafkaconnector users that we're done
 	}()
@@ -196,9 +196,9 @@ func (connector *Connector) StartProducer(broker string) error {
 	// everything declared and configured, lets go
 	connector.producer, err = sarama.NewAsyncProducer(brokers, config)
 	if err != nil {
-		return err
+		log.Panicf("Kafka Producer: Error creating producer client: %v", err)
 	}
-	log.Println("Kafka Producer TLS connection established.")
+	log.Println("Kafka Producer: Connection established.")
 	return nil
 }
 
@@ -238,6 +238,7 @@ func (connector *Connector) ProducerChannel(topic string) chan *flow.FlowMessage
 func (connector *Connector) Close() {
 	log.Println("Kafka Connector closed.")
 	if connector.consumer != nil {
+		log.Println("Kafka Consumer: Closing...")
 		connector.consumer.Close()
 	}
 	if connector.producer != nil {
