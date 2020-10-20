@@ -4,7 +4,7 @@ import (
 	"context"
 	"github.com/Shopify/sarama"
 	flow "github.com/bwNetFlow/protobuf/go"
-	"github.com/gogo/protobuf/proto"
+	"github.com/golang/protobuf/proto"
 	"log"
 )
 

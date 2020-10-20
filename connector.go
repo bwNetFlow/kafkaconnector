@@ -14,7 +14,7 @@ import (
 	"github.com/Shopify/sarama"
 
 	flow "github.com/bwNetFlow/protobuf/go"
-	"github.com/gogo/protobuf/proto"
+	"github.com/golang/protobuf/proto"
 
 	prometheusmetrics "github.com/deathowl/go-metrics-prometheus"
 	prometheus "github.com/prometheus/client_golang/prometheus"
