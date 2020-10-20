@@ -26,13 +26,16 @@ import (
 type Connector struct {
 	user             string
 	pass             string
-	consumer         *Consumer
-	producer         sarama.AsyncProducer
-	consumerChannel  chan *flow.FlowMessage
-	producerChannels map[string](chan *flow.FlowMessage)
 	authDisable      bool
 	tlsDisable       bool
 	prometheusEnable bool
+
+	consumer        *Consumer
+	consumerChannel chan *flow.FlowMessage
+
+	producer         sarama.AsyncProducer
+	producerChannels map[string](chan *flow.FlowMessage)
+	producerWg       *sync.WaitGroup
 }
 
 // DisableAuth disables authentification
@@ -183,10 +186,11 @@ func (connector *Connector) StartProducer(broker string) error {
 	config.Producer.RequiredAcks = sarama.WaitForLocal       // Only wait for the leader to ack
 	config.Producer.Compression = sarama.CompressionSnappy   // Compress messages
 	config.Producer.Flush.Frequency = 500 * time.Millisecond // Flush batches every 500ms
-	config.Producer.Return.Successes = false                 // this would block until we've read the ACK
-	config.Producer.Return.Errors = true                     // TODO: read from producer.Errors somewhere
+	config.Producer.Return.Successes = false                 // this would block until we've read the ACK, just don't
+	config.Producer.Return.Errors = false                    // TODO: make configurable as logging feature
 
 	connector.producerChannels = make(map[string](chan *flow.FlowMessage))
+	connector.producerWg = &sync.WaitGroup{}
 	// everything declared and configured, lets go
 	connector.producer, err = sarama.NewAsyncProducer(brokers, config)
 	if err != nil {
@@ -207,28 +211,25 @@ func (connector *Connector) ConsumerChannel() <-chan *flow.FlowMessage {
 // Return the channel used for handing over Flows to the Kafka Producer.
 // If writing to this channel blocks, check the log.
 func (connector *Connector) ProducerChannel(topic string) chan *flow.FlowMessage {
-	if channel, initialized := connector.producerChannels[topic]; initialized {
-		return channel
+	if _, initialized := connector.producerChannels[topic]; !initialized {
+		connector.producerChannels[topic] = make(chan *flow.FlowMessage)
+		connector.producerWg.Add(1)
+		go func() {
+			for message := range connector.producerChannels[topic] {
+				binary, err := proto.Marshal(message)
+				if err != nil {
+					log.Printf("Kafka Producer: Could not encode message to topic %s with error '%v'", topic, err)
+					continue
+				}
+				connector.producer.Input() <- &sarama.ProducerMessage{
+					Topic: topic,
+					Value: sarama.ByteEncoder(binary),
+				}
+			}
+			log.Printf("Kafka Producer: Terminating topic %s, channel has closed", topic)
+			connector.producerWg.Done()
+		}()
 	}
-	connector.producerChannels[topic] = make(chan *flow.FlowMessage)
-	go func() {
-		for {
-			message, more := <-connector.producerChannels[topic]
-			binary, err := proto.Marshal(message)
-			if err != nil {
-				log.Printf("producer: Could not encode message to topic %s with error '%v'", topic, err)
-				continue
-			}
-			connector.producer.Input() <- &sarama.ProducerMessage{
-				Topic: topic,
-				Value: sarama.ByteEncoder(binary),
-			}
-			if !more {
-				log.Printf("producer: terminating topic %s, channel has closed", topic)
-				return
-			}
-		}
-	}()
 	return connector.producerChannels[topic]
 }
 
@@ -238,6 +239,11 @@ func (connector *Connector) Close() {
 		connector.consumer.Close()
 	}
 	if connector.producer != nil {
+		log.Println("Kafka Producer: Closing...")
+		for _, producerChannel := range connector.producerChannels {
+			close(producerChannel)
+		}
+		connector.producerWg.Wait()
 		connector.producer.Close()
 	}
 }
