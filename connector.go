@@ -115,7 +115,7 @@ func (connector *Connector) StartConsumer(brokers string, topics []string, group
 		prometheusClient := prometheusmetrics.NewPrometheusProvider(config.MetricRegistry, "sarama", "consumer", prometheus.DefaultRegisterer, 14*time.Second)
 		go prometheusClient.UpdatePrometheusMetrics()
 		http.Handle("/metrics", promhttp.Handler())
-		go http.ListenAndServe(":2112", nil)
+		go http.ListenAndServe(":2112", nil) // TODO: make configurable
 	}
 	config.Version = version
 	config.Consumer.Group.Rebalance.Strategy = sarama.BalanceStrategySticky
@@ -185,7 +185,7 @@ func (connector *Connector) StartProducer(broker string) error {
 		prometheusClient := prometheusmetrics.NewPrometheusProvider(config.MetricRegistry, "sarama", "producer", prometheus.DefaultRegisterer, 14*time.Second)
 		go prometheusClient.UpdatePrometheusMetrics()
 		http.Handle("/metrics", promhttp.Handler())
-		go http.ListenAndServe(":2113", nil)
+		go http.ListenAndServe(":2113", nil) // TODO: make configurable
 	}
 
 	config.Producer.RequiredAcks = sarama.WaitForLocal       // Only wait for the leader to ack
