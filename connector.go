@@ -82,7 +82,11 @@ func (connector *Connector) SetAuthFromEnv() error {
 func (connector *Connector) NewBaseConfig() *sarama.Config {
 	config := sarama.NewConfig()
 
-	version, err := sarama.ParseKafkaVersion("2.4.0") // TODO: get somewhere
+	// NOTE: This version enables Sarama support for everything we need and
+	// more. However, a lower version might suffice to.
+	// Actual, higher cluster versions are still supported with this.
+	// Consider making this configurable anyways
+	version, err := sarama.ParseKafkaVersion("2.4.0")
 	if err != nil {
 		log.Panicf("Error parsing Kafka version: %v", err)
 	}
