@@ -81,6 +81,13 @@ func (connector *Connector) SetAuthFromEnv() error {
 // EnablePrometheus enables metric exporter for both, Consumer and Producer
 func (connector *Connector) NewBaseConfig() *sarama.Config {
 	config := sarama.NewConfig()
+
+	version, err := sarama.ParseKafkaVersion("2.4.0") // TODO: get somewhere
+	if err != nil {
+		log.Panicf("Error parsing Kafka version: %v", err)
+	}
+	config.Version = version
+
 	if !connector.tlsDisable {
 		// Enable TLS
 		rootCAs, err := x509.SystemCertPool()
@@ -110,15 +117,12 @@ func (connector *Connector) NewBaseConfig() *sarama.Config {
 func (connector *Connector) StartConsumer(brokers string, topics []string, group string, offset int64) error {
 	var err error
 	config := connector.NewBaseConfig()
-	version, err := sarama.ParseKafkaVersion("2.4.0") // TODO: get somewhere
-	if err != nil {
-		log.Panicf("Error parsing Kafka version: %v", err)
-	}
+
 	if connector.prometheusEnable {
 		prometheusClient := prometheusmetrics.NewPrometheusProvider(config.MetricRegistry, "sarama", "consumer", prometheus.DefaultRegisterer, 10*time.Second)
 		go prometheusClient.UpdatePrometheusMetrics()
 	}
-	config.Version = version
+
 	config.Consumer.Group.Rebalance.Strategy = sarama.BalanceStrategySticky
 	config.Consumer.Offsets.Initial = offset
 
