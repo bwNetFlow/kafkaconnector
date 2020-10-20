@@ -10,9 +10,9 @@ import (
 
 // Consumer represents a Sarama consumer group consumer
 type Consumer struct {
-	ready chan bool
-	flows chan *flow.FlowMessage
-	Close context.CancelFunc
+	ready  chan bool
+	flows  chan *flow.FlowMessage
+	cancel context.CancelFunc
 }
 
 // Setup is run at the beginning of a new session, before ConsumeClaim
@@ -26,13 +26,15 @@ func (consumer *Consumer) Setup(sarama.ConsumerGroupSession) error {
 
 // Cleanup is run at the end of a session, once all ConsumeClaim goroutines have exited
 func (consumer *Consumer) Cleanup(sarama.ConsumerGroupSession) error {
-	close(consumer.flows)
 	return nil
+}
+
+func (consumer *Consumer) Close() {
+	consumer.cancel()
 }
 
 // ConsumeClaim must start a consumer loop of ConsumerGroupClaim's Messages().
 func (consumer *Consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-
 	// NOTE:
 	// Do not move the code below to a goroutine.
 	// The `ConsumeClaim` itself is called within a goroutine, see:

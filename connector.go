@@ -7,10 +7,8 @@ import (
 	"errors"
 	"log"
 	"os"
-	"os/signal"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/Shopify/sarama"
@@ -128,7 +126,7 @@ func (connector *Connector) StartConsumer(brokers string, topics []string, group
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	connector.consumer.Close = cancel
+	connector.consumer.cancel = cancel
 	client, err := sarama.NewConsumerGroup(strings.Split(brokers, ","), group, config)
 	if err != nil {
 		log.Panicf("Error creating consumer group client: %v", err)
@@ -156,20 +154,14 @@ func (connector *Connector) StartConsumer(brokers string, topics []string, group
 	<-connector.consumer.ready // Await till the consumer has been set up
 	log.Println("Sarama consumer up and running!...")
 
-	go func() { // this is the goroutine that sticks around waiting for signals
-		sigterm := make(chan os.Signal, 1)
-		signal.Notify(sigterm, syscall.SIGINT, syscall.SIGTERM)
-		select {
-		case <-ctx.Done():
-			log.Println("terminating: context cancelled")
-		case <-sigterm:
-			log.Println("terminating: via signal")
-		}
-		cancel()
+	go func() { // this is the goroutine that sticks around to close stuff
+		<-ctx.Done()
+		log.Println("terminating: context cancelled")
 		wg.Wait()
 		if err = client.Close(); err != nil {
 			log.Panicf("Error closing client: %v", err)
 		}
+		close(connector.consumer.flows) // signal kafkaconnector users that we're done
 	}()
 	return nil
 }
@@ -241,6 +233,11 @@ func (connector *Connector) ProducerChannel(topic string) chan *flow.FlowMessage
 }
 
 func (connector *Connector) Close() {
-	close(connector.consumer.flows)
-	connector.producer.Close()
+	log.Println("Kafka Connector closed.")
+	if connector.consumer != nil {
+		connector.consumer.Close()
+	}
+	if connector.producer != nil {
+		connector.producer.Close()
+	}
 }
