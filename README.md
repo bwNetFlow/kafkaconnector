@@ -1,16 +1,28 @@
+# bwNetFlow Go Kafka Connector
+
+This is a opinionated implementation of a common Connector module for all of
+our official components and optionally for users of our platform that intend to
+write client applications in Go. It provides an abstraction for plain Sarama
+and has support for consuming topics as well as producing to multiple topics,
+all while converting any message according to our
+[protobuf definition](https://github.com/bwNetFlow/protobuf) for Flow messages
+(which is based on [goflow](https://github.com/cloudflare/goflow)'s
+definition).
+
 [![Build Status](https://travis-ci.org/bwNetFlow/kafkaconnector.svg)](https://travis-ci.org/bwNetFlow/kafkaconnector)
 [![Go Report Card](https://goreportcard.com/badge/github.com/bwNetFlow/kafkaconnector)](https://goreportcard.com/report/github.com/bwNetFlow/kafkaconnector)
 [![GoDoc](https://godoc.org/github.com/bwNetFlow/kafkaconnector?status.svg)](https://godoc.org/github.com/bwNetFlow/kafkaconnector)
 
-# bwNetFlow Go Kafka Connector
-
-Example Usage:
+## Example Usage in Consumer-only mode:
 
 ```go
 package main
 
 import (
 	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/Shopify/sarama"
 	kafka "github.com/bwNetFlow/kafkaconnector"
@@ -19,63 +31,39 @@ import (
 var kafkaConn = kafka.Connector{}
 
 func main() {
+	fmt.Printf("welcome... let's go!\n")
 
-	fmt.Printf("welcome ... let's go!\n")
-
-	// connect to the BelWue Kafka cluster
+	// prepare all variables
 	broker := "127.0.0.1:9092,[::1]:9092" // TODO: set valid uris
 	topic := []string{"flow-messages-anon"}
 	consumerGroup := "anon-golang-example"
 	kafkaConn.SetAuthAnon() // optionally: change to SetAuthFromEnv() or SetAuth(user string, pass string)
-	kafkaConn.StartConsumer(broker, topic, consumerGroup, sarama.OffsetNewest)
-	defer kafkaConn.Close()
 
-	// receive flows: e.g. count flows & bytes
+	kafkaConn.EnablePrometheus(":2112") // optionally open up for monitoring
+
+	// ensure a clean exit
+	sigchan := make(chan os.Signal, 1)
+	signal.Notify(sigchan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigchan
+		fmt.Println("Signal caught, exiting...")
+		kafkaConn.Close()
+	}()
+
+	// receive flows
+	kafkaConn.StartConsumer(broker, topic, consumerGroup, sarama.OffsetNewest)
 	var flowCounter, byteCounter uint64
-	for {
-		flow := <-kafkaConn.ConsumerChannel()
+	for flow := range kafkaConn.ConsumerChannel() {
 		// process the flow here ...
 		flowCounter++
 		byteCounter += flow.GetBytes()
 		fmt.Printf("\rflows: %d, bytes: %d GB", flowCounter, byteCounter/1024/1024/1024)
 	}
-
 }
 ```
 
-## Step by step guide
-
- * Make sure you have golang installed
- * Make new directory "go-example", and place file a `client.go` with the above listed code snippet in it
- * Inside "go-example" run `go get ./...` to download the dependencies (will be downloaded to the path $GOPATH)
- * Inside "go-example" run `go run client.go` to execute the example from source code
- * If you want to build a binary, run `go build client.go` which produces the "client" binary (run it with `./client`)
-
-## flowfilter
-
-The kafkaconnector contains also an optional flowfilter, which allows to filter for customer ID, IP address (ranges) and peers. Example usage:
-
-```go
-var (
-	// filtering
-	filterCustomerIDs = flag.String("filter.customerid", "", "If defined, only flows for this customer are considered. Leave empty to disable filter. Provide comma separated list to filter for multiple customers.")
-	filterIPsv4       = flag.String("filter.IPsv4", "", "If defined, only flows to/from this IP V4 subnet are considered. Leave empty to disable filter. Provide comma separated list to filter for multiple IP subnets.")
-	filterIPsv6       = flag.String("filter.IPsv6", "", "If defined, only flows to/from this IP V6 subnet are considered. Leave empty to disable filter. Provide comma separated list to filter for multiple IP subnets.")
-	filterPeers       = flag.String("filter.peers", "", "If defined, only flows to/from this peer are considered. Leave empty to disable filter. Provide comma separated list to filter for multiple peers.")
-)
-
-func main() {
-	// ... establish connection, etc.
-
-	// initialize filters: prepare filter arrays
-	flowFilter = flowFilter.NewFlowFilter(*filterCustomerIDs, *filterIPsv4, *filterIPsv6, *filterPeers)
-
-	// handle kafka flow messages in foreground
-	for {
-		flow := <-kafkaConn.ConsumerChannel()
-		if flowFilter.FilterApplies(flow) {
-			handleFlow(flow)
-		}
-	}
-}
-```
+## Example Usage in Consumer/Producer mode:
+Check out
+[processor_splitter](https://github.com/bwNetFlow/processor_splitter), it is
+very simple and consumes a single topic while producing to multiple target
+topics.

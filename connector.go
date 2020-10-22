@@ -1,43 +1,41 @@
 package kafka
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
-	"fmt"
 	"log"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Shopify/sarama"
-	cluster "github.com/bsm/sarama-cluster"
+
 	flow "github.com/bwNetFlow/protobuf/go"
+	"github.com/golang/protobuf/proto"
+
+	prometheusmetrics "github.com/deathowl/go-metrics-prometheus"
+	prometheus "github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"net/http"
 )
 
 // Connector handles a connection to read bwNetFlow flows from kafka.
 type Connector struct {
-	user                       string
-	pass                       string
-	consumer                   *cluster.Consumer
-	producer                   sarama.AsyncProducer
-	consumerChannel            chan *flow.FlowMessage
-	hasConsumerControlListener bool
-	consumerControlChannel     chan ConsumerControlMessage
-	producerChannels           map[string](chan *flow.FlowMessage)
-	manualErrFlag              bool
-	manualErrSignal            chan bool
-	channelLength              uint
-	authDisable                bool
-	tlsDisable                 bool
-}
+	user             string
+	pass             string
+	authDisable      bool
+	tlsDisable       bool
+	prometheusEnable bool
 
-// ConsumerControlMessage takes the control params of *sarama.ConsumerMessage
-type ConsumerControlMessage struct {
-	Partition      int32
-	Offset         int64
-	Timestamp      time.Time // only set if kafka is version 0.10+, inner message timestamp
-	BlockTimestamp time.Time // only set if kafka is version 0.10+, outer (compressed) block timestamp
+	consumer        *Consumer
+	consumerChannel chan *flow.FlowMessage
+
+	producer         sarama.AsyncProducer
+	producerChannels map[string](chan *flow.FlowMessage)
+	producerWg       *sync.WaitGroup
 }
 
 // DisableAuth disables authentification
@@ -50,10 +48,23 @@ func (connector *Connector) DisableTLS() {
 	connector.tlsDisable = true
 }
 
+// EnablePrometheus enables metric exporter for both, Consumer and Producer
+func (connector *Connector) EnablePrometheus(listen string) {
+	connector.prometheusEnable = true
+	http.Handle("/metrics", promhttp.Handler())
+	go http.ListenAndServe(listen, nil)
+}
+
 // SetAuth explicitly set which login to use in SASL/PLAIN auth via TLS
 func (connector *Connector) SetAuth(user string, pass string) {
 	connector.user = user
 	connector.pass = pass
+}
+
+// Set anonymous credentials as login method.
+func (connector *Connector) SetAuthAnon() {
+	connector.user = "anon"
+	connector.pass = "anon"
 }
 
 // Check environment to infer which login to use in SASL/PLAIN auth via TLS
@@ -67,123 +78,102 @@ func (connector *Connector) SetAuthFromEnv() error {
 	return nil
 }
 
-// Set anonymous credentials as login method.
-func (connector *Connector) SetAuthAnon() {
-	connector.user = "anon"
-	connector.pass = "anon"
-}
+// EnablePrometheus enables metric exporter for both, Consumer and Producer
+func (connector *Connector) NewBaseConfig() *sarama.Config {
+	config := sarama.NewConfig()
 
-// Enable manual error handling by setting the internal flags.
-// Any application calling this will have to read all messages provided by the
-// channels returned from the ConsumerErrors, ConsumerNotifications and
-// ProducerErrors methods. Else there will be deadlocks.
-//
-// If this is called before any `.Start*` method was called, no go routines
-// will be spawned for logging any messages. This is the recommended case.
-// If this is called after any `.Start*` method was called, spawned go routines
-// will be terminated.
-func (connector *Connector) EnableManualErrorHandling() {
-	connector.manualErrFlag = true
-	if connector.manualErrSignal != nil {
-		close(connector.manualErrSignal)
+	// NOTE: This version enables Sarama support for everything we need and
+	// more. However, a lower version might suffice to.
+	// Actual, higher cluster versions are still supported with this.
+	// Consider making this configurable anyways
+	version, err := sarama.ParseKafkaVersion("2.4.0")
+	if err != nil {
+		log.Panicf("Error parsing Kafka version: %v", err)
 	}
-}
+	config.Version = version
 
-// Set the channel length to something >0. Maybe read the source before using it.
-func (connector *Connector) SetChannelLength(l uint) {
-	connector.channelLength = l
-}
-
-// Start a Kafka Consumer with the specified parameters. Its output will be
-// available in the channel returned by ConsumerChannel.
-func (connector *Connector) StartConsumer(broker string, topics []string, consumergroup string, offset int64) error {
-	var err error
-	if !connector.manualErrFlag && connector.manualErrSignal == nil {
-		connector.manualErrSignal = make(chan bool)
-	}
-	brokers := strings.Split(broker, ",")
-	consConf := cluster.NewConfig()
 	if !connector.tlsDisable {
 		// Enable TLS
 		rootCAs, err := x509.SystemCertPool()
 		if err != nil {
-			log.Println("TLS Error:", err)
-			return err
+			log.Panicf("TLS Error: %v", err)
 		}
-		consConf.Net.TLS.Enable = true
-		consConf.Net.TLS.Config = &tls.Config{RootCAs: rootCAs}
+		config.Net.TLS.Enable = true
+		config.Net.TLS.Config = &tls.Config{RootCAs: rootCAs}
 	}
 
 	if !connector.authDisable {
-		consConf.Net.SASL.Enable = true
+		config.Net.SASL.Enable = true
+
 		if connector.user == "" && connector.pass == "" {
 			log.Println("No Auth information is set. Assuming anonymous auth...")
 			connector.SetAuthAnon()
 		}
-		consConf.Net.SASL.User = connector.user
-		consConf.Net.SASL.Password = connector.pass
+		config.Net.SASL.User = connector.user
+		config.Net.SASL.Password = connector.pass
 	}
 
-	// Enable these unconditionally.
-	consConf.Consumer.Return.Errors = true
-	consConf.Group.Return.Notifications = true
-	// The offset only works initially. When reusing a Consumer Group, it's
-	// last state will be resumed automatcally (grep MarkOffset)
-	consConf.Consumer.Offsets.Initial = offset
+	return config
+}
+
+// Start a Kafka Consumer with the specified parameters. Its output will be
+// available in the channel returned by ConsumerChannel.
+func (connector *Connector) StartConsumer(brokers string, topics []string, group string, offset int64) error {
+	var err error
+	config := connector.NewBaseConfig()
+
+	if connector.prometheusEnable {
+		prometheusClient := prometheusmetrics.NewPrometheusProvider(config.MetricRegistry, "sarama", "consumer", prometheus.DefaultRegisterer, 10*time.Second)
+		go prometheusClient.UpdatePrometheusMetrics()
+	}
+
+	config.Consumer.Group.Rebalance.Strategy = sarama.BalanceStrategySticky
+	config.Consumer.Offsets.Initial = offset
 
 	// everything declared and configured, lets go
-	tlslog := fmt.Sprintf("without tls (!)")
-	if !connector.tlsDisable {
-		tlslog = fmt.Sprintf("with tls")
+	log.Printf("Kafka Consumer: Connecting to %s", brokers)
+	connector.consumer = &Consumer{
+		ready: make(chan bool),
 	}
-	authlog := fmt.Sprintf("without authentication (!)")
-	if !connector.authDisable {
-		authlog = fmt.Sprintf("with user %s", connector.user)
-	}
-	log.Printf("Trying to connect to Kafka %s %s %s", broker, tlslog, authlog)
-	connector.consumer, err = cluster.NewConsumer(brokers, consumergroup, topics, consConf)
-	if err != nil {
-		return err
-	}
-	log.Println("Kafka Consumer TLS connection established.")
 
-	// start message handling in background
-	connector.consumerChannel = make(chan *flow.FlowMessage, connector.channelLength)
-	connector.consumerControlChannel = make(chan ConsumerControlMessage, connector.channelLength)
-	go decodeMessages(connector)
-	if !connector.manualErrFlag {
-		go func() {
-			log.Println("Spawned a Consumer Logger, no manual error handling.")
-			running := true
-			errors := connector.consumer.Errors()
-			notifications := connector.consumer.Notifications()
-			for running {
-				select {
-				case msg, ok := <-errors:
-					if !ok {
-						errors = nil // nil channels are never selected
-						log.Println("Kafka Consumer Error: Channel Closed.")
-					} else {
-						log.Printf("Kafka Consumer Error: %s\n", msg.Error())
-					}
-				case msg, ok := <-notifications:
-					if !ok {
-						notifications = nil // nil channels are never selected
-						log.Println("Kafka Consumer Notification: Channel Closed.")
-					} else {
-						log.Printf("Kafka Consumer Notification: %+v\n", msg)
-					}
-				case _, ok := <-connector.manualErrSignal:
-					running = ok
-				}
-				if errors == nil && notifications == nil {
-					log.Println("Consumer Logger: All upstream channels are closed.")
-					break
-				}
-			}
-			log.Println("Consumer Logger terminated.")
-		}()
+	ctx, cancel := context.WithCancel(context.Background())
+	connector.consumer.cancel = cancel
+	client, err := sarama.NewConsumerGroup(strings.Split(brokers, ","), group, config)
+	if err != nil {
+		log.Panicf("Kafka Consumer: Error creating consumer group client: %v", err)
 	}
+
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+	go func() { // this is the goroutine doing the work
+		defer wg.Done()
+		for {
+			// `Consume` should be called inside an infinite loop, when a
+			// server-side rebalance happens, the consumer session will need to be
+			// recreated to get the new claims
+			if err := client.Consume(ctx, topics, connector.consumer); err != nil {
+				log.Panicf("Kafka Consumer: Error consuming: %v", err)
+			}
+			// check if context was cancelled, signaling that the consumer should stop
+			if ctx.Err() != nil {
+				return
+			}
+			connector.consumer.ready = make(chan bool)
+		}
+	}()
+
+	<-connector.consumer.ready // Await till the consumer has been set up
+	log.Println("Kafka Consumer: Connection established.")
+
+	go func() { // this is the goroutine that sticks around to close stuff
+		<-ctx.Done()
+		log.Println("Kafka Consumer: Terminating, waiting for partition threads...")
+		wg.Wait()
+		if err = client.Close(); err != nil {
+			log.Panicf("Kafka Consumer: Error closing client: %v", err)
+		}
+		close(connector.consumer.flows) // signal kafkaconnector users that we're done
+	}()
 	return nil
 }
 
@@ -191,105 +181,29 @@ func (connector *Connector) StartConsumer(broker string, topics []string, consum
 // by ProducerChannel will be accepting your input.
 func (connector *Connector) StartProducer(broker string) error {
 	var err error
-	if !connector.manualErrFlag && connector.manualErrSignal == nil {
-		connector.manualErrSignal = make(chan bool)
-	}
 	brokers := strings.Split(broker, ",")
-	prodConf := sarama.NewConfig()
-	
-	if !connector.tlsDisable {
-		// Enable TLS
-		rootCAs, err := x509.SystemCertPool()
-		if err != nil {
-			log.Println("TLS Error:", err)
-			return err
-		}
-		prodConf.Net.TLS.Enable = true
-		prodConf.Net.TLS.Config = &tls.Config{RootCAs: rootCAs}
+	config := connector.NewBaseConfig()
+
+	if connector.prometheusEnable {
+		prometheusClient := prometheusmetrics.NewPrometheusProvider(config.MetricRegistry, "sarama", "producer", prometheus.DefaultRegisterer, 10*time.Second)
+		go prometheusClient.UpdatePrometheusMetrics()
 	}
 
-	if !connector.authDisable {
-		prodConf.Net.SASL.Enable = true
-		if connector.user == "" && connector.pass == "" {
-			log.Println("No Auth information is set. Assuming anonymous auth...")
-			connector.SetAuthAnon()
-		}
-		prodConf.Net.SASL.User = connector.user
-		prodConf.Net.SASL.Password = connector.pass
-	}
-
-	prodConf.Producer.Return.Successes = false // this would block until we've read the ACK
-	prodConf.Producer.Return.Errors = true
+	config.Producer.RequiredAcks = sarama.WaitForLocal       // Only wait for the leader to ack
+	config.Producer.Compression = sarama.CompressionSnappy   // Compress messages
+	config.Producer.Flush.Frequency = 500 * time.Millisecond // Flush batches every 500ms
+	config.Producer.Return.Successes = false                 // this would block until we've read the ACK, just don't
+	config.Producer.Return.Errors = false                    // TODO: make configurable as logging feature
 
 	connector.producerChannels = make(map[string](chan *flow.FlowMessage))
+	connector.producerWg = &sync.WaitGroup{}
 	// everything declared and configured, lets go
-	connector.producer, err = sarama.NewAsyncProducer(brokers, prodConf)
+	connector.producer, err = sarama.NewAsyncProducer(brokers, config)
 	if err != nil {
-		return err
+		log.Panicf("Kafka Producer: Error creating producer client: %v", err)
 	}
-	log.Println("Kafka Producer TLS connection established.")
-
-	// start message handling in background
-	if !connector.manualErrFlag {
-		go func() {
-			log.Println("Spawned a Producer Logger, no manual error handling.")
-			running := true
-			for running {
-				select {
-				case msg, ok := <-connector.producer.Errors():
-					if !ok {
-						running = false
-						log.Println("Kafka Producer Error: Channel Closed.")
-						continue
-					}
-					log.Printf("Kafka Producer Error: %s\n", msg.Error())
-				case _, ok := <-connector.manualErrSignal:
-					running = ok
-				}
-			}
-			log.Println("Producer Logger terminated.")
-		}()
-	}
+	log.Println("Kafka Producer: Connection established.")
 	return nil
-}
-
-// Close closes the connection to kafka, i.e. Consumer and Producer
-func (connector *Connector) Close() {
-	log.Println("Kafka Connector Close method called.")
-	if connector.consumer != nil {
-		connector.consumer.Close()
-		log.Println("Kafka Consumer connection closed.")
-	}
-	if connector.producer != nil {
-		connector.producer.Close()
-		log.Println("Kafka Producer connection closed.")
-	}
-}
-
-// Close the Kafka Consumer specifically.
-func (connector *Connector) CloseConsumer() {
-	log.Println("Kafka Connector CloseConsumer method called.")
-	if connector.consumer != nil {
-		connector.consumer.Close()
-		log.Println("Kafka Consumer connection closed.")
-	} else {
-		log.Println("WARNING: CloseConsumer called, but no Consumer was initialized.")
-	}
-}
-
-// Close the Kafka Producer specifically.
-func (connector *Connector) CloseProducer() {
-	log.Println("Kafka Connector CloseProducer method called.")
-	for topic, channel := range connector.producerChannels {
-		log.Printf("Kafka Producer: Closed producer channel for topic %s.\n", topic)
-		close(channel)
-	}
-	if connector.producer != nil {
-		connector.producer.Close()
-		log.Println("Kafka Producer connection closed.")
-	} else {
-		log.Println("WARNING: CloseProducer called, but no Producer was initialized.")
-	}
 }
 
 // Return the channel used for receiving Flows from the Kafka Consumer.
@@ -297,56 +211,46 @@ func (connector *Connector) CloseProducer() {
 // channel previously of the last decoding step. You can restart the Consumer
 // by using .StartConsumer() on the same Connector object.
 func (connector *Connector) ConsumerChannel() <-chan *flow.FlowMessage {
-	return connector.consumerChannel
+	return connector.consumer.flows
 }
 
 // Return the channel used for handing over Flows to the Kafka Producer.
 // If writing to this channel blocks, check the log.
 func (connector *Connector) ProducerChannel(topic string) chan *flow.FlowMessage {
-	if channel, initialized := connector.producerChannels[topic]; initialized {
-		return channel
+	if _, initialized := connector.producerChannels[topic]; !initialized {
+		connector.producerChannels[topic] = make(chan *flow.FlowMessage)
+		connector.producerWg.Add(1)
+		go func() {
+			for message := range connector.producerChannels[topic] {
+				binary, err := proto.Marshal(message)
+				if err != nil {
+					log.Printf("Kafka Producer: Could not encode message to topic %s with error '%v'", topic, err)
+					continue
+				}
+				connector.producer.Input() <- &sarama.ProducerMessage{
+					Topic: topic,
+					Value: sarama.ByteEncoder(binary),
+				}
+			}
+			log.Printf("Kafka Producer: Terminating topic %s, channel has closed", topic)
+			connector.producerWg.Done()
+		}()
 	}
-	connector.producerChannels[topic] = make(chan *flow.FlowMessage, connector.channelLength)
-	go encodeMessages(connector.producer, topic, connector.producerChannels[topic])
 	return connector.producerChannels[topic]
 }
 
-// Consumer Errors relayed directly from the Kafka Cluster.
-//
-// This will become an exclusive reference only after EnableManualErrorHandling
-// has been called.
-// IMPORTANT: read EnableManualErrorHandling docs carefully
-func (connector *Connector) ConsumerErrors() <-chan error {
-	return connector.consumer.Errors()
-}
-
-// Consumer Notifications are relayed directly from the Kafka Cluster.
-// These include which topics and partitions are read by this instance
-// and are sent on every Rebalancing Event.
-//
-// This will become an exclusive reference only after EnableManualErrorHandling
-// has been called.
-// IMPORTANT: read EnableManualErrorHandling docs carefully
-func (connector *Connector) ConsumerNotifications() <-chan *cluster.Notification {
-	return connector.consumer.Notifications()
-}
-
-// Producer Errors are relayed directly from the Kafka Cluster.
-//
-// This will become an exclusive reference only after EnableManualErrorHandling
-// has been called.
-// IMPORTANT: read EnableManualErrorHandling docs carefully
-func (connector *Connector) ProducerErrors() <-chan *sarama.ProducerError {
-	return connector.producer.Errors()
-}
-
-// GetConsumerControlMessages enables and returns a channel for control messages `ConsumerControlMessage`
-func (connector *Connector) GetConsumerControlMessages() <-chan ConsumerControlMessage {
-	connector.hasConsumerControlListener = true
-	return connector.consumerControlChannel
-}
-
-// CancelConsumerControlMessages disables the channel for control messages `ConsumerControlMessage`
-func (connector *Connector) CancelConsumerControlMessages() {
-	connector.hasConsumerControlListener = false
+func (connector *Connector) Close() {
+	log.Println("Kafka Connector closed.")
+	if connector.consumer != nil {
+		log.Println("Kafka Consumer: Closing...")
+		connector.consumer.Close()
+	}
+	if connector.producer != nil {
+		log.Println("Kafka Producer: Closing...")
+		for _, producerChannel := range connector.producerChannels {
+			close(producerChannel)
+		}
+		connector.producerWg.Wait()
+		connector.producer.Close()
+	}
 }
