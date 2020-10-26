@@ -17,8 +17,6 @@ type Consumer struct {
 
 // Setup is run at the beginning of a new session, before ConsumeClaim
 func (consumer *Consumer) Setup(sarama.ConsumerGroupSession) error {
-	// Create our return channel
-	consumer.flows = make(chan *flow.FlowMessage)
 	// Mark the consumer as ready
 	close(consumer.ready)
 	return nil
@@ -40,7 +38,6 @@ func (consumer *Consumer) ConsumeClaim(session sarama.ConsumerGroupSession, clai
 	// The `ConsumeClaim` itself is called within a goroutine, see:
 	// https://github.com/Shopify/sarama/blob/master/consumer_group.go#L27-L29
 	for message := range claim.Messages() {
-		// log.Printf("Message claimed: value = %s, timestamp = %v, topic = %s", string(message.Value), message.Timestamp, message.Topic)
 		session.MarkMessage(message, "")
 		flowMsg := new(flow.FlowMessage)
 		err := proto.Unmarshal(message.Value, flowMsg)
@@ -50,6 +47,5 @@ func (consumer *Consumer) ConsumeClaim(session sarama.ConsumerGroupSession, clai
 		}
 		consumer.flows <- flowMsg
 	}
-
 	return nil
 }

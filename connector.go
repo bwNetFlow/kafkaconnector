@@ -30,8 +30,7 @@ type Connector struct {
 	tlsDisable       bool
 	prometheusEnable bool
 
-	consumer        *Consumer
-	consumerChannel chan *flow.FlowMessage
+	consumer *Consumer
 
 	producer         sarama.AsyncProducer
 	producerChannels map[string](chan *flow.FlowMessage)
@@ -134,6 +133,7 @@ func (connector *Connector) StartConsumer(brokers string, topics []string, group
 	log.Printf("Kafka Consumer: Connecting to %s", brokers)
 	connector.consumer = &Consumer{
 		ready: make(chan bool),
+		flows: make(chan *flow.FlowMessage),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
