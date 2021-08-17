@@ -16,10 +16,11 @@ import (
 	flow "github.com/bwNetFlow/protobuf/go"
 	"github.com/golang/protobuf/proto"
 
+	"net/http"
+
 	prometheusmetrics "github.com/deathowl/go-metrics-prometheus"
 	prometheus "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"net/http"
 )
 
 // Connector handles a connection to read bwNetFlow flows from kafka.
@@ -140,7 +141,8 @@ func (connector *Connector) StartConsumer(brokers string, topics []string, group
 	connector.consumer.cancel = cancel
 	client, err := sarama.NewConsumerGroup(strings.Split(brokers, ","), group, config)
 	if err != nil {
-		log.Panicf("Kafka Consumer: Error creating consumer group client: %v", err)
+		log.Printf("Kafka Consumer: Error creating consumer group client: %v", err)
+		return errors.New("ConnectionError")
 	}
 
 	wg := &sync.WaitGroup{}
